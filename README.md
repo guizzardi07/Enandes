@@ -55,8 +55,8 @@ funciones para cargar observados e hindcasts, calcular métricas (RMSE, MAE, BIA
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/tu-usuario/tu-repositorio.git
-cd tu-repositorio
+git clone https://github.com/guizzardi07/Enandes.git
+cd Enandes
 ```
 
 ### 2. Crear un entorno virtual (opcional pero recomendado)
