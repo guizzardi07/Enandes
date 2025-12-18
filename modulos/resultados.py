@@ -276,18 +276,18 @@ def plot_obs_y_resumen_pronos(
     df_h = df_h.sort_values("Fecha")
 
     df_media = df_h.groupby("Fecha")["Valor"].mean()
-    df_p10 = df_h.groupby("Fecha")["Valor"].quantile(0.10)
-    df_p90 = df_h.groupby("Fecha")["Valor"].quantile(0.90)
+    # df_p10 = df_h.groupby("Fecha")["Valor"].quantile(0.10)
+    # df_p90 = df_h.groupby("Fecha")["Valor"].quantile(0.90)
 
     ax.plot(df_media.index, df_media.values,
-            label="Media pronósticos",
+            label="Pronósticos",# "Media pronósticos"
             color="tab:blue")
-    ax.fill_between(df_p10.index, df_p10, df_p90,
-                    alpha=0.2,
-                    color="tab:blue",
-                    label="P10 - P90")
+    # ax.fill_between(df_p10.index, df_p10, df_p90,
+    #                 alpha=0.2,
+    #                 color="tab:blue",
+    #                 label="P10 - P90")
 
-    ax.set_title("Serie observada + resumen de pronósticos")
+    #ax.set_title("Serie observada + resumen de pronósticos")
     ax.set_xlabel("Fecha")
     ax.set_ylabel("Nivel [m]")
     ax.grid(alpha=0.3)
