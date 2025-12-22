@@ -71,9 +71,9 @@ source .venv/bin/activate
 
 ### 3. Instalar dependencias
 ```bash
-pip install pandas numpy matplotlib statsmodels python-dotenv a5client openpyxl streamlit
+python.exe -m pip install --upgrade pip
+pip install pandas numpy matplotlib statsmodels python-dotenv a5-client openpyxl streamlit
 ```
-
 
 ## Configurar credenciales A5
 El sistema utiliza `python-dotenv` para leer parámetros desde un archivo `.env`.

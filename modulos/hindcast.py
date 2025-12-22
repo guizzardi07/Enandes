@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Iterable
 
 import numpy as np
 import pandas as pd
@@ -42,7 +42,6 @@ def evaluar_estaciones_individuales(
         if df_cal.empty:
             logger.warning("No hay datos simultáneos para %s - %s", est, obs_col)
             continue
-        lag = get_response_time(up_series=df_cal["up"],down_series=df_cal["down"],max_lag=max_lag,ini=ini_lag,)     
         
         try:
             lag = get_response_time(
@@ -132,9 +131,12 @@ def ajustar_estacion_con_lag(
     modelo = OLS(y, X).fit()
 
     y_fit = modelo.predict(X)
-    y_fit.index = y.index 
+    
+    y_obs = y.copy()
+    y_fit = pd.Series(modelo.predict(X), index=y_obs.index, name="fit")
+    return y_obs, y_fit, modelo
 
-    return y, y_fit, modelo
+
 
 def calibrar_y_pronosticar_ventana(
     df_union: pd.DataFrame,
@@ -455,3 +457,172 @@ def forecast_from_upstream(
 
     y_hat = const + beta * up_at
     return pd.Series(y_hat, index=idx_t, name=f"y_hat_{est}_lag{lag}")
+
+def estimar_lags_por_estacion(
+    df_union: pd.DataFrame,
+    estaciones: Tuple[str, ...] | Iterable[str],
+    obs_col: str,
+    max_lag: int = 72,
+    ini_lag: int = 2,
+) -> pd.DataFrame:
+    """
+    Estima lag óptimo por estación upstream respecto a obs_col, usando correlación con barrido de lags.
+    Devuelve DF con columnas:
+      - Estacion
+      - lag_optimo
+      - corr_max (si se puede computar; NaN si no)
+      - n (cantidad de puntos usados en el cálculo)
+    """
+    estaciones = tuple(estaciones)
+    out = []
+
+    # Validación mínima
+    if df_union is None or df_union.empty:
+        return pd.DataFrame(columns=["Estacion", "lag_optimo", "corr_max", "n"])
+
+    if obs_col not in df_union.columns:
+        raise KeyError(f"obs_col {obs_col!r} no está en df_union.columns")
+
+    down = df_union[obs_col]
+
+    for est in estaciones:
+        if est not in df_union.columns:
+            out.append({"Estacion": est, "lag_optimo": 0, "corr_max": np.nan, "n": 0})
+            continue
+
+        up = df_union[est]
+
+        # Lag óptimo (ya maneja NaNs internamente al dropear)
+        try:
+            lag = int(get_response_time(up, down, max_lag=max_lag, ini=ini_lag))
+        except Exception:
+            lag = 0
+
+        # Corr máxima (opcional, rápida): recomputamos corr a ese lag para reportar
+        df_pair = pd.concat([up, down], axis=1).dropna()
+        n = int(df_pair.shape[0])
+        if n == 0:
+            corr_max = np.nan
+        else:
+            corr_max = float(df_pair.iloc[:, 0].shift(lag).corr(df_pair.iloc[:, 1]))
+
+        out.append({"Estacion": est, "lag_optimo": lag, "corr_max": corr_max, "n": n})
+
+    return pd.DataFrame(out)
+
+def get_lag_for_station(
+    df_lags: pd.DataFrame,
+    station_name: str,
+    default: int = 0) -> int:
+    """
+    Devuelve lag_manual para una estación, independientemente de si el DF usa
+    'estacion', 'Estacion' o el índice. Hace matching robusto (exacto y suave).
+    """
+    if df_lags is None or df_lags.empty:
+        return int(default)
+
+    # detectar columna de nombre
+    name_col = None
+    if "Estacion" in df_lags.columns:
+        name_col = "Estacion"
+    elif "estacion" in df_lags.columns:
+        name_col = "estacion"
+
+    # lag_manual debe existir
+    if "lag_manual" not in df_lags.columns:
+        return int(default)
+
+    # --- caso con columna ---
+    if name_col is not None:
+        # match exacto
+        m = df_lags[name_col].astype(str) == str(station_name)
+        if m.any():
+            return int(df_lags.loc[m, "lag_manual"].iloc[0])
+
+        # match suave
+        key = str(station_name).strip().lower()
+        s_map = {str(v).strip().lower(): i for i, v in df_lags[name_col].items()}
+        if key in s_map:
+            return int(df_lags.loc[s_map[key], "lag_manual"])
+
+    # --- fallback: índice ---
+    if station_name in df_lags.index:
+        return int(df_lags.loc[station_name, "lag_manual"])
+
+    idx_map = {str(i).strip().lower(): i for i in df_lags.index}
+    key = str(station_name).strip().lower()
+    if key in idx_map:
+        return int(df_lags.loc[idx_map[key], "lag_manual"])
+
+    return int(default)
+
+
+
+
+def forecast_horizon_from_upstream_last(
+    df_union: pd.DataFrame,
+    est: str,
+    obs_col: str,
+    lag: int,
+    modelo,
+    freq: str = "1h",
+) -> pd.Series:
+    """
+    Pronóstico hacia adelante en obs_col usando upstream 'est' y un modelo ya ajustado.
+
+    Idea:
+      y_hat(t) = const + beta * up(t - lag*step)
+
+    Para pronosticar "hacia adelante", usamos los últimos datos de upstream:
+      si up está disponible hasta T_up_max,
+      entonces podemos pronosticar obs hasta T_up_max + lag*step,
+      pero SOLO para tiempos t donde (t - lag*step) exista en upstream.
+
+    Devuelve una serie indexada en tiempos FUTUROS respecto al último obs disponible en df_union[obs_col].
+    """
+    if df_union is None or df_union.empty:
+        return pd.Series(dtype=float)
+
+    if est not in df_union.columns:
+        raise KeyError(f"Upstream {est!r} no está en df_union")
+
+    if obs_col not in df_union.columns:
+        raise KeyError(f"obs_col {obs_col!r} no está en df_union")
+
+    step = pd.to_timedelta(freq)
+    lag = int(lag or 0)
+
+    up = df_union[est].dropna()
+    obs = df_union[obs_col].dropna()
+
+    if up.empty or obs.empty:
+        return pd.Series(dtype=float)
+
+    # último obs disponible en downstream
+    t_obs_last = obs.index.max()
+    # último dato disponible en upstream
+    t_up_last = up.index.max()
+
+    # Los tiempos pronosticables en downstream son:
+    # t = t_up + lag*step, para cada timestamp t_up de upstream
+    t_future = up.index + lag * step
+    # Nos quedamos SOLO con los que son estrictamente futuros respecto al último obs
+    t_future = t_future[t_future > t_obs_last]
+
+    if len(t_future) == 0:
+        return pd.Series(dtype=float)
+
+    # params
+    const = float(modelo.params.get("const", 0.0))
+    beta = float(modelo.params.get("up_lag", np.nan))
+
+    # valores de upstream que alimentan cada t_future: up(t - lag)
+    # como t_future = up.index + lag, el "t - lag" es exactamente up.index
+    up_vals = up.reindex(t_future - lag * step).to_numpy()
+
+    y_hat = const + beta * up_vals
+    y_hat = pd.Series(y_hat, index=t_future, name=f"fcst_{est}_lag{lag}")
+
+    # limpieza final (por si hay NaNs en el borde)
+    y_hat = y_hat.dropna()
+    return y_hat
