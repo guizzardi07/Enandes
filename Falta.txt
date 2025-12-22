@@ -1,0 +1,5 @@
+Actualizar readme
+Limpieza de series
+tablas exportadas redondear decimales
+Titulos figuras.
+Exportar resultados solo con boton

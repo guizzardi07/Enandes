@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
+import matplotlib.dates as mdates
 
 # Uso:  streamlit run app_streamlit_v4.py
 
@@ -764,13 +765,30 @@ else:
 
     # Plot final + línea vertical de emisión
     st.markdown("### Última semana (obs) + ajuste + pronóstico")
+
+    st.pyplot(fig, width='stretch')
+
     fig = plot_timeseries_daily_grid(
         df_final,
         ylabel="Nivel",
         title="Observado (última semana) + modelo (ajuste + pronóstico)",
     )
-    # agregar línea vertical punteada en t_emit
     ax = fig.axes[0]
+    
+    # EJE X:
+    # Ticks mayores SOLO a las 00 y 12
+    ax.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 12]))
+    # Día arriba, hora abajo
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m\n%H:%M"))
+    # Ticks menores cada 3 horas (solo grilla)
+    ax.xaxis.set_minor_locator(mdates.HourLocator(interval=3))
+    ax.tick_params(axis="x", which="major", labelsize=8, rotation=0)
+
+    # Grillas
+    ax.grid(True, which="major", axis="both", linestyle="-", alpha=0.4)
+    ax.grid(True, which="minor", axis="x", linestyle=":", alpha=0.35)
+
+    # Línea vertical de emisión
     ax.axvline(t_emit, linestyle="--", linewidth=1)
     ax.text(
         t_emit,
@@ -781,7 +799,8 @@ else:
         fontsize=8,
     )
 
-    st.pyplot(fig, width='stretch')
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
 
     # Descargas
     st.markdown("### Descargar series (obs + modelo)")
