@@ -97,7 +97,7 @@ def leer_serie_nivel_estacion(
         plt.grid(linestyle="-.", linewidth=0.5)
         plt.tight_layout()
         plt.legend()
-        plt.show()
+        #plt.show()
 
     meta = {
         "Estacion": estacion,

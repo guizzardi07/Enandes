@@ -75,6 +75,8 @@ def DetectaSaltos_v1(df: pd.DataFrame,
     Detección simple de saltos mediante comparación de la serie con
     una media móvil adelante/atrás.
     """
+    cols_originales = df.columns.tolist()
+
     df_f = df.copy()
     half = (ventana_largo - 1) // 2
 
@@ -94,7 +96,8 @@ def DetectaSaltos_v1(df: pd.DataFrame,
     df_f[col_filt] = df_f[nomCol]
     df_f.loc[df_f["es_outlier"], col_filt] = np.nan
 
-    return df_f
+    return df_f[cols_originales]
+
 
 # Funciones auxiliares de análisis / gráficos
 def inferir_frecuencia(index: pd.DatetimeIndex):
@@ -180,12 +183,15 @@ PARAMS_LIMPIEZA: Dict[str, Dict] = {
     },
     "Misión La Paz": {
         "outliers": (2.205, 8.0),
+        "saltos": {"ventana": 7, "umbral": 2},
     },
     "Villa Montes": {
         "outliers": (0.25, 8.0),
+        "saltos": {"ventana": 7, "umbral": 2},
     },
     "Puente Aruma": {
         "outliers": (2.4, 9.0),
+        "saltos": {"ventana": 7, "umbral": 2},
     },
     "Palca Grande": {
         "outliers": (0, 9.0),

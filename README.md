@@ -71,7 +71,7 @@ source .venv/bin/activate
 
 ### 3. Instalar dependencias
 ```bash
-pip install pandas numpy matplotlib statsmodels python-dotenv a5client openpyxl
+pip install pandas numpy matplotlib statsmodels python-dotenv a5client openpyxl streamlit
 ```
 
 

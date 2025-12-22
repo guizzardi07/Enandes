@@ -8,9 +8,9 @@ Enfoque de esta versión:
 4) Estimar lag óptimo por estación en una ventana elegida
 5) Aplicar lag (auto o manual) y graficar 3 series: upstream cruda, upstream alineada por lag, downstream obs
 
-Notas:
-- El app intenta funcionar tanto si tu proyecto tiene paquete "modulos/" como si están los .py sueltos.
-- Requiere streamlit, pandas, matplotlib y tus dependencias del proyecto (a5client, etc.).
+
+Uso:
+  streamlit run app_streamlit_v2.py
 """
 
 from __future__ import annotations

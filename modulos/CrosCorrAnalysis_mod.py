@@ -48,7 +48,7 @@ def get_response_time(up_series, down_series, max_lag=80, ini=2,plot_lags=False)
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.legend()
         plt.tight_layout()
-        plt.show()
+        #plt.show()
     
     return best_lag
 

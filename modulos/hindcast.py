@@ -98,6 +98,44 @@ def evaluar_estaciones_individuales(
     orden = df_res["estacion"].tolist()
     return orden, df_res
 
+def ajustar_estacion_con_lag(
+    df_union: pd.DataFrame,
+    est: str,
+    obs_col: str,
+    lag: int,
+    min_muestras: int = 50,
+) -> tuple[pd.Series, pd.Series, object]:
+    """
+    Ajusta un modelo lineal obs ~ upstream_lag.
+    
+    Devuelve:
+    - y_obs (Serie observada)
+    - y_fit (Serie ajustada)
+    - modelo (OLS)
+    """
+    up = df_union[est]
+    down = df_union[obs_col]
+
+    df_cal = pd.concat([up, down], axis=1).dropna()
+    df_cal.columns = ["up", "down"]
+
+    df_cal["up_lag"] = df_cal["up"].shift(lag)
+    data = df_cal.dropna(subset=["up_lag", "down"])
+
+    if len(data) < min_muestras:
+        raise ValueError(f"Datos insuficientes tras aplicar lag={lag} (n={len(data)}).")
+
+    X = data[["up_lag"]]
+    X = add_constant(X)
+    y = data["down"]
+
+    modelo = OLS(y, X).fit()
+
+    y_fit = modelo.predict(X)
+    y_fit.index = y.index 
+
+    return y, y_fit, modelo
+
 def calibrar_y_pronosticar_ventana(
     df_union: pd.DataFrame,
     t_emision: pd.Timestamp,
@@ -391,3 +429,29 @@ def hindcast_diario(
 
     df_hind = pd.concat(todos_registros, ignore_index=True)
     return df_hind
+
+def forecast_from_upstream(
+    df: pd.DataFrame,
+    est: str,
+    obs_col: str,
+    lag: int,
+    modelo,
+    freq: str = "1h",
+) -> pd.Series:
+    """
+    y_hat(t) = const + beta * up(t - lag*step)
+    Devuelve Serie indexada por t (tiempo objetivo).
+    """
+    step = pd.to_timedelta(freq)
+
+    up = df[est].copy()
+    idx_t = df.index
+
+    t_up = idx_t - lag * step
+    up_at = up.reindex(t_up).to_numpy()
+
+    const = float(modelo.params.get("const", 0.0))
+    beta = float(modelo.params.get("up_lag", np.nan))
+
+    y_hat = const + beta * up_at
+    return pd.Series(y_hat, index=idx_t, name=f"y_hat_{est}_lag{lag}")
