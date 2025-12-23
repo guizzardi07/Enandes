@@ -774,7 +774,7 @@ else:
         title="Observado (última semana) + modelo (ajuste + pronóstico)",
     )
     ax = fig.axes[0]
-    
+
     # EJE X:
     # Ticks mayores SOLO a las 00 y 12
     ax.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 12]))
@@ -800,7 +800,7 @@ else:
     )
 
     fig.tight_layout()
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width='content')
 
     # Descargas
     st.markdown("### Descargar series (obs + modelo)")
