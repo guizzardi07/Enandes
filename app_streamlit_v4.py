@@ -123,8 +123,6 @@ if "plot_aligned_end" not in st.session_state:
 # nombres para descargas
 if "archivo_descarga_csv" not in st.session_state:
     st.session_state.archivo_descarga_csv = "series_limpias.csv"
-if "archivo_descarga_xlsx" not in st.session_state:
-    st.session_state.archivo_descarga_xlsx = "series_limpias.xlsx"
 
 # Estaciones
 st.subheader("Estaciones")
@@ -169,16 +167,14 @@ with p1b:
     )
 
 today = today_local()
-default_start = today - timedelta(days=365)
+default_start = today - timedelta(days=90)
 default_end = today
 
-c1, c2, c3 = st.columns([1, 1, 2], gap="large")
+c1, c2 = st.columns([1, 1], gap="large")
 with c1:
     d_start = st.date_input("Desde", value=default_start, format="DD/MM/YYYY", key="download_from")
 with c2:
     d_end = st.date_input("Hasta", value=default_end, format="DD/MM/YYYY", key="download_to")
-with c3:
-    st.caption("Por defecto: hoy − 1 año → hoy.")
 
 run_build = st.button("Descargar + limpiar (construir df_union)", type="primary")
 
@@ -252,44 +248,31 @@ if st.session_state.df_union is not None:
     df_union: pd.DataFrame = st.session_state.df_union
 
     st.write("Vista rápida (últimas filas):")
-    st.dataframe(df_union.tail(10), width='stretch')
+    st.dataframe(df_union.tail(5), width='stretch')
 
     # nombres de descarga
-    n1, n2 = st.columns([1.2, 1.8], gap="large")
-    with n1:
-        st.session_state.archivo_descarga_csv = st.text_input(
-            "Nombre archivo (CSV)",
-            value=st.session_state.archivo_descarga_csv,
-            key="archivo_descarga_csv_input",
-        )
-    with n2:
-        st.session_state.archivo_descarga_xlsx = st.text_input(
-            "Nombre resumen (Excel)",
-            value=st.session_state.archivo_descarga_xlsx,
-            key="archivo_descarga_xlsx_input",
-        )
-
+    # n1 = st.columns([1.2], gap="large")
+    # with n1:
+    st.session_state.archivo_descarga_csv = st.text_input(
+        "Nombre resumen (csv)",
+        value=st.session_state.archivo_descarga_csv,
+        key="archivo_descarga_csv_input",
+    )
+    
     csv_name = safe_filename(st.session_state.archivo_descarga_csv, "series_limpias.csv")
-    xlsx_name = safe_filename(st.session_state.archivo_descarga_xlsx, "series_limpias.xlsx")
 
-    dcol1, dcol2, dcol3 = st.columns([1, 1, 2], gap="large")
+    dcol1, dcol2 = st.columns([1, 2], gap="large")
     with dcol1:
+        csv_bytes = df_union.to_csv(index=True).encode("utf-8")
+
         st.download_button(
             "Descargar CSV (series limpias)",
-            data=df_to_csv_bytes(df_union, index=True),
+            data=csv_bytes,
             file_name=csv_name,
             mime="text/csv",
         )
     with dcol2:
-        excel_bytes = df_to_excel_bytes(df_union, sheet_name="series_limpias")
-        st.download_button(
-            "Descargar Excel (series limpias)",
-            data=excel_bytes,
-            file_name=xlsx_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    with dcol3:
-        st.caption("Se guardan automáticamente en `resultados/` al presionar Descargar + limpiar.")
+        st.caption("Guarda en la carpeta Descargas del navegador.")
 
     st.markdown("### Series descargadas (sin lag)")
 
@@ -350,9 +333,9 @@ else:
     with c2:
         lag_end = st.date_input("Ventana lag - hasta", value=default_lag_end, key="lag_end", format="DD/MM/YYYY")
     with c3:
-        max_lag = st.number_input("max_lag (pasos)", min_value=1, max_value=500, value=72, step=1, key="max_lag")
+        ini_lag = st.number_input("Inicio lag (pasos)", min_value=0, max_value=200, value=10, step=1, key="ini_lag")
     with c4:
-        ini_lag = st.number_input("ini_lag (pasos)", min_value=0, max_value=200, value=2, step=1, key="ini_lag")
+        max_lag = st.number_input("Máximo (pasos)", min_value=1, max_value=500, value=72, step=1, key="max_lag")
 
     run_lag = st.button("Estimar lag óptimo", type="primary", key="run_lag_btn")
 
@@ -475,177 +458,8 @@ else:
 
             st.caption("Todas las upstream se desplazan según su `lag_manual` (en pasos de 1H).")
 
-# Paso 3 — Ajuste
-st.subheader("Paso 3 — Ajuste y pronóstico (modelo + lag)")
 
-if (st.session_state.df_union is None) or (st.session_state.lags_df is None):
-    st.info("Ejecutá Paso 1 y Paso 2 para habilitar el ajuste (df_union + lags_df).")
-else:
-    df_union = st.session_state.df_union
-    df_lags_edit = st.session_state.lags_df
-    obs_col = st.session_state.obs_col
-
-    upstream_cols_all = [c for c in df_union.columns if c != obs_col]
-    est_sel = st.selectbox("Elegí estación upstream", upstream_cols_all, key="fit_station_select")
-
-    lag_sel = get_lag_for_station(st.session_state.lags_df, est_sel, default=0)
-    st.caption(f"Lag usado (lag_manual): **{lag_sel} h**")
-
-    pstart, pend = default_plot_window_from_index(df_union.index, days=90)
-
-    st.markdown("### Ventana de ajuste (calibración)")
-    fs1, fs2 = st.columns(2, gap="large")
-    with fs1:
-        fit_start = st.date_input(
-            "AJUSTE - desde",
-            value=pstart,
-            key="fit_start",
-            format="DD/MM/YYYY",
-        )
-    with fs2:
-        fit_end = st.date_input(
-            "AJUSTE - hasta",
-            value=pend,
-            key="fit_end",
-            format="DD/MM/YYYY",
-        )
-
-    st.markdown("### Ventana de gráfico / evaluación")
-    same_window = st.checkbox("Usar la misma ventana para el gráfico", value=True, key="fit_same_window")
-
-    if same_window:
-        plot_start, plot_end = fit_start, fit_end
-    else:
-        ps1, ps2 = st.columns(2, gap="large")
-        with ps1:
-            plot_start = st.date_input(
-                "GRÁFICO - desde",
-                value=fit_start,
-                key="plot_fit_start",
-                format="DD/MM/YYYY",
-            )
-        with ps2:
-            plot_end = st.date_input(
-                "GRÁFICO - hasta",
-                value=fit_end,
-                key="plot_fit_end",
-                format="DD/MM/YYYY",
-            )
-
-    df_fit = df_union.loc[
-        datetime.combine(fit_start, datetime.min.time()):
-        datetime.combine(fit_end, datetime.max.time())
-    ].copy()
-
-    df_plot = df_union.loc[
-        datetime.combine(plot_start, datetime.min.time()):
-        datetime.combine(plot_end, datetime.max.time())
-    ].copy()
-
-    if df_fit.empty:
-        st.warning("La ventana de AJUSTE no tiene datos.")
-        st.stop()
-
-    try:
-        y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
-            df_union=df_fit,
-            est=est_sel,
-            obs_col=obs_col,
-            lag=lag_sel,
-        )
-    except Exception as e:
-        st.exception(e)
-        st.stop()
-
-    # Métricas del ajuste
-    m1, m2, m3, m4 = st.columns(4, gap="large")
-    with m1:
-        st.metric("R² (ajuste)", f"{float(getattr(modelo, 'rsquared', float('nan'))):.3f}")
-    with m2:
-        st.metric("n (ajuste)", f"{int(getattr(modelo, 'nobs', 0))}")
-    with m3:
-        try:
-            st.metric("Intercepto", f"{float(modelo.params.get('const', float('nan'))):.3f}")
-        except Exception:
-            st.metric("Intercepto", "—")
-    with m4:
-        try:
-            st.metric("Pendiente", f"{float(modelo.params.get('up_lag', float('nan'))):.3f}")
-        except Exception:
-            st.metric("Pendiente", "—")
-
-    st.markdown("### Ajuste")
-    df_fit_plot = pd.DataFrame(
-        {
-            f"{obs_col} (obs)": y_obs_fit,
-            f"Fit (desde {est_sel}, lag {lag_sel}h)": y_fit_fit,
-        }
-    )
-    fig_fit = plot_timeseries_daily_grid(
-        df_fit_plot,
-        ylabel="Nivel",
-        title=f"Ajuste {est_sel} → {obs_col} (ventana de ajuste)",
-    )
-    st.pyplot(fig_fit, width='stretch')
-
-    st.markdown("### Scatter — Obs vs Fit")
-    fig_sc_fit = plot_scatter_obs_fit(
-        y_obs_fit,
-        y_fit_fit,
-        title="Obs vs Fit",
-        figsize=(2.75, 2.75),
-        s=10,
-        fontsize=9,
-        ticksize=8,
-    )
-    st.pyplot(fig_sc_fit, width='content')
-
-    # Pronóstico aplicado a df_plot
-    # st.markdown("### Pronóstico aplicado (ventana de GRÁFICO / evaluación)")
-
-    # if df_plot.empty:
-    #     st.warning("La ventana de GRÁFICO no tiene datos.")
-    #     st.stop()
-
-    # y_hat_plot = forecast_from_upstream(
-    #     df=df_plot,
-    #     est=est_sel,
-    #     obs_col=obs_col,
-    #     lag=lag_sel,
-    #     modelo=modelo,
-    #     freq="1h",
-    # )
-
-    # y_obs_plot = df_plot[obs_col]
-
-    # df_pred_plot = pd.DataFrame(
-    #     {
-    #         f"{obs_col} (obs)": y_obs_plot,
-    #         f"Pronóstico (desde {est_sel}, lag {lag_sel}h)": y_hat_plot,
-    #     }
-    # )
-
-    # fig_pred = plot_timeseries_daily_grid(
-    #     df_pred_plot,
-    #     ylabel="Nivel",
-    #     title="Observado vs Pronóstico (ventana de gráfico)",
-    # )
-    # st.pyplot(fig_pred, width='stretch')
-
-    # st.markdown("### Scatter — Obs vs Pronóstico")
-    # fig_sc_eval = plot_scatter_obs_fit(
-    #     y_obs_plot,
-    #     y_hat_plot,
-    #     title="Obs vs Pronóstico (evaluación)",
-    #     figsize=(2.75, 2.75),
-    #     s=10,
-    #     fontsize=9,
-    #     ticksize=8,
-    # )
-    # st.pyplot(fig_sc_eval, width='content')
-
-# Paso 4 — Pronóstico operativo
-st.subheader("Paso 4 — Última semana + ajuste + pronóstico operativo")
+st.subheader("Paso 3 — Ajuste + diagnóstico (opcional) + operativo")
 
 if (st.session_state.df_union is None) or (st.session_state.lags_df is None):
     st.info("Ejecutá Paso 1 y Paso 2.")
@@ -655,23 +469,45 @@ else:
     obs_col = st.session_state.obs_col
 
     upstream_all = [c for c in df_union.columns if c != obs_col]
+
+    # 1) Elegir estaciones (como en el Paso 4)
     upstream_sel = st.multiselect(
-        "Estaciones upstream para pronóstico",
+        "Estaciones upstream (máx. 2)",
         options=upstream_all,
         default=upstream_all[:2],
         max_selections=2,
-        key="fcst_upstream_sel",
+        key="upstream_sel_unificado",
     )
     if len(upstream_sel) == 0:
         st.stop()
 
-    # Ventana de ajuste (calibración)
+    # 2) Mostrar lag adoptado para cada estación seleccionada
+    lag_rows = []
+    for est in upstream_sel:
+        lag = int(get_lag_for_station(lags_df, est, default=0))
+        lag_rows.append({"Estacion": est, "lag_adoptado_h": lag})
+    st.markdown("### Lags adoptados")
+    st.dataframe(pd.DataFrame(lag_rows), width="stretch")
+
+    # 3) Ventana de ajuste (calibración) — ÚNICA (se usa para todo)
     pstart, pend = default_plot_window_from_index(df_union.index, days=90)
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        fit_start = st.date_input("AJUSTE (batch) - desde", value=pstart, key="fit4_start", format="DD/MM/YYYY")
-    with c2:
-        fit_end = st.date_input("AJUSTE (batch) - hasta", value=pend, key="fit4_end", format="DD/MM/YYYY")
+
+    st.markdown("### Ventana de ajuste (calibración)")
+    fs1, fs2 = st.columns(2, gap="large")
+    with fs1:
+        fit_start = st.date_input(
+            "AJUSTE - desde",
+            value=pstart,
+            key="fit_start_unif",
+            format="DD/MM/YYYY",
+        )
+    with fs2:
+        fit_end = st.date_input(
+            "AJUSTE - hasta",
+            value=pend,
+            key="fit_end_unif",
+            format="DD/MM/YYYY",
+        )
 
     df_fit = df_union.loc[
         datetime.combine(fit_start, datetime.min.time()):
@@ -681,14 +517,83 @@ else:
     if df_fit.empty:
         st.warning("La ventana de AJUSTE no tiene datos.")
         st.stop()
+
+    # -------------------------------------------------------------------------
+    # 4) Diagnóstico (opcional, colapsado) — usa df_fit (la ventana de arriba)
+    # -------------------------------------------------------------------------
+    with st.expander("Diagnóstico (ajuste + evaluación) — opcional", expanded=False):
+        st.caption("El diagnóstico usa la ventana de AJUSTE seleccionada arriba.")
+
+        est_diag = st.selectbox(
+            "Estación para diagnóstico",
+            options=upstream_sel,      # solo entre las elegidas
+            key="est_diag_select",
+        )
+
+        lag_diag = int(get_lag_for_station(lags_df, est_diag, default=0))
+        st.caption(f"Lag usado (lag_manual): **{lag_diag} h**")
+
+        # Ajuste en df_fit
+        try:
+            y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
+                df_union=df_fit,
+                est=est_diag,
+                obs_col=obs_col,
+                lag=lag_diag,
+            )
+        except Exception as e:
+            st.exception(e)
+            st.stop()
+
+        # Métricas
+        m1, m2, m3, m4 = st.columns(4, gap="large")
+        with m1:
+            st.metric("R² (ajuste)", f"{float(getattr(modelo, 'rsquared', float('nan'))):.3f}")
+        with m2:
+            st.metric("n (ajuste)", f"{int(getattr(modelo, 'nobs', 0))}")
+        with m3:
+            st.metric("Intercepto", f"{float(modelo.params.get('const', float('nan'))):.3f}")
+        with m4:
+            st.metric("Pendiente", f"{float(modelo.params.get('up_lag', float('nan'))):.3f}")
+
+        # Gráfico ajuste temporal
+        st.markdown("#### Ajuste temporal")
+        df_fit_plot = pd.DataFrame(
+            {
+                f"{obs_col} (obs)": y_obs_fit,
+                f"Fit (desde {est_diag}, lag {lag_diag}h)": y_fit_fit,
+            }
+        )
+        fig_fit = plot_timeseries_daily_grid(
+            df_fit_plot,
+            ylabel="Nivel",
+            title=f"Ajuste {est_diag} → {obs_col}",
+        )
+        st.pyplot(fig_fit, width="stretch")
+
+        # Scatter
+        st.markdown("#### Scatter — Obs vs Fit")
+        fig_sc_fit = plot_scatter_obs_fit(
+            y_obs_fit,
+            y_fit_fit,
+            title="Obs vs Fit",
+            figsize=(2.75, 2.75),
+            s=10,
+            fontsize=9,
+            ticksize=8,
+        )
+        st.pyplot(fig_sc_fit, width="content")
     
-    # Ventana "última semana" (para ver ajuste reciente)
+    # 5) Operativo — Última semana + ajuste + pronóstico (SIN pedir fechas)
+    #     - usa df_fit (ventana seleccionada arriba) para calibrar
+    st.markdown("### Operativo — Última semana + ajuste + pronóstico")
+
     obs = df_union[obs_col].dropna()
     if obs.empty:
         st.warning("No hay observado en estación objetivo.")
         st.stop()
 
-    t_emit = obs.index.max()  # fecha de emisión del prono (último obs disponible)
+    t_emit = obs.index.max()
     t_start = t_emit - pd.Timedelta(days=7)
 
     df_week = df_union.loc[t_start:t_emit].copy()
@@ -700,7 +605,7 @@ else:
     for est in upstream_sel:
         lag = int(get_lag_for_station(lags_df, est, default=0))
 
-        # 1) Ajuste del modelo en df_fit
+        # Ajustar modelo usando la ventana df_fit (la seleccionada arriba)
         y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
             df_union=df_fit,
             est=est,
@@ -708,7 +613,7 @@ else:
             lag=lag,
         )
 
-        # 2) "Ajuste reciente" (hindcast) sobre la última semana
+        # Ajuste reciente (última semana)
         y_hist_week = forecast_from_upstream(
             df=df_week,
             est=est,
@@ -716,9 +621,9 @@ else:
             lag=lag,
             modelo=modelo,
             freq="1h",
-        ).rename(f"Ajuste semana ({est}, lag {lag}h)")
+        )
 
-        # 3) Pronóstico hacia adelante (futuro)
+        # Pronóstico futuro
         y_fcst = forecast_horizon_from_upstream_last(
             df_union=df_union,
             est=est,
@@ -726,50 +631,36 @@ else:
             lag=lag,
             modelo=modelo,
             freq="1h",
-        ).rename(f"Pronóstico ({est}, lag {lag}h)")
-
-        if y_fcst.empty:
-            st.warning(
-                f"No se generó pronóstico futuro con {est} (lag {lag}h). "
-                "Probablemente upstream no tiene datos más recientes que downstream."
-            )
-
-        # 4) Curva continua: semana previa (ajuste) + futuro (pronóstico)
-        y_full = pd.concat(
-            [
-                y_hist_week.loc[:t_emit],
-                y_fcst.loc[y_fcst.index > t_emit],
-            ]
         )
+
+        # Curva continua: semana previa + futuro
+        y_full = pd.concat([y_hist_week.loc[:t_emit], y_fcst.loc[y_fcst.index > t_emit]])
         y_full = y_full[~y_full.index.duplicated(keep="first")]
         y_full = y_full.rename(f"Modelo ({est}, lag {lag}h)")
-
         forecasts.append(y_full)
 
-        meta_rows.append({
-            "Estacion": est,
-            "lag_manual_h": lag,
-            "R2_ajuste": float(getattr(modelo, "rsquared", float("nan"))),
-            "n_ajuste": int(getattr(modelo, "nobs", 0)),
-            "const": float(modelo.params.get("const", np.nan)),
-            "beta_up_lag": float(modelo.params.get("up_lag", np.nan)),
-        })
+        meta_rows.append(
+            {
+                "Estacion": est,
+                "lag_adoptado_h": lag,
+                "R2_ajuste": float(getattr(modelo, "rsquared", float("nan"))),
+                "n_ajuste": int(getattr(modelo, "nobs", 0)),
+                "const": float(modelo.params.get("const", np.nan)),
+                "beta_up_lag": float(modelo.params.get("up_lag", np.nan)),
+            }
+        )
 
     meta = pd.DataFrame(meta_rows)
-    st.markdown("### Resumen modelos (batch)")
-    st.dataframe(meta, width='stretch')
+    st.markdown("#### Resumen modelos")
+    st.dataframe(meta, width="stretch")
 
-    # Dataset final para plot y export
     df_final = pd.concat([obs_lastweek] + forecasts, axis=1)
 
-    # Plot final + línea vertical de emisión
-    st.markdown("### Última semana (obs) + ajuste + pronóstico")
     fig = plot_timeseries_daily_grid(
         df_final,
         ylabel="Nivel",
         title="Observado (última semana) + modelo (ajuste + pronóstico)",
     )
-    # agregar línea vertical punteada en t_emit
     ax = fig.axes[0]
     ax.axvline(t_emit, linestyle="--", linewidth=1)
     ax.text(
@@ -780,11 +671,10 @@ else:
         ha="left",
         fontsize=8,
     )
+    st.pyplot(fig, width="stretch")
 
-    st.pyplot(fig, width='stretch')
-
-    # Descargas
-    st.markdown("### Descargar series (obs + modelo)")
+    # Descarga SOLO CSV
+    st.markdown("#### Descargar (CSV)")
     df_export = df_final.copy()
     df_export.index.name = "Fecha"
     df_export = df_export.reset_index()
@@ -795,13 +685,3 @@ else:
         file_name="ultima_semana_ajuste_y_pronostico.csv",
         mime="text/csv",
     )
-
-    st.download_button(
-        "Descargar Excel",
-        data=df_to_excel_bytes(df_export, sheet_name="series"),
-        file_name="ultima_semana_ajuste_y_pronostico.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
- 

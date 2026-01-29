@@ -1,56 +1,32 @@
-# Pronóstico hidrológico del río Pilcomayo en Misión la Paz
-
-Automatización e implementación de procedimientos operativos
-
-Este repositorio implementa un flujo completo para:
-
-* Descargar series de nivel desde la API A5.
-* Limpiar y homogeneizar las series.
-* Ajustar modelos lineales con retardo (lag) entre estaciones aguas arriba y Misión La Paz, seleccionar la mejor estación predictora y generar hindcasts diarios.
-* Evaluar el desempeño de los pronósticos y generar gráficos de diagnóstico.
-
-## Estructura principal del proyecto
-
-Los scripts más importantes son:
-
-### **`run_hindcast.py`**
-Descarga y limpia las series de nivel desde A5.
-Construye el archivo unificado resultados/series_nivel_union_h.csv y un resumen en resultados/resumen_series_niveles_h.xlsx.
-Evalúa cada estación aguas arriba de forma individual para elegir la mejor y la secundaria.
-Corre el hindcast diario y guarda los pronósticos en la carpeta resultados.
-
-### **`plot_hindcast.py`**
-Carga la serie observada de Misión La Paz desde series_nivel_union_h.csv.
-Carga el archivo de hindcast generado por run_hindcast.py.
-Genera gráficos y métricas por lead de pronóstico.
-
-### **`modulos/limpieza_series.py`** 
-Funciones para limpieza de series (eliminación de ventanas, corrimientos, outliers, saltos, gráficos rápidos) y diccionario de parámetros por estación.
-
-### **`modulos/series.py`**
-Flujo de descarga, análisis de frecuencia, limpieza y unificación de las series en un único DataFrame.
-
-### **`modulos/hindcast.py`**
-Evaluación de estaciones individuales, calibración ventana a ventana y generación del hindcast diario.
-
-### **`modulos/resultados.py`**
-funciones para cargar observados e hindcasts, calcular métricas (RMSE, MAE, BIAS, NSE) y graficar resultados.
-
-## Requisitos
-* Python **3.10+**
-* Librerías principales:
-
-  ```
-  pandas
-  numpy
-  matplotlib
-  statsmodels
-  python-dotenv
-  a5client
-  openpyxl
-  ```
+# Tablero de Control – Pilcomayo
 
 ## Instalación
+
+### 0. Instalar Python
+
+La aplicación requiere **Python 3.10 o superior**.
+
+1. Descargar Python desde el sitio oficial:
+   👉 [https://www.python.org/downloads/](https://www.python.org/downloads/)
+
+2. Durante la instalación:
+
+   * ✔️ Marcar **“Add Python to PATH”**
+   * ✔️ Usar la instalación estándar
+
+3. Verificar la instalación:
+
+```bash
+python --version
+```
+
+Debería devolver algo como:
+
+```
+Python 3.10.x
+```
+
+---
 
 ### 1. Clonar el repositorio
 
@@ -59,76 +35,241 @@ git clone https://github.com/guizzardi07/Enandes.git
 cd Enandes
 ```
 
+---
+
 ### 2. Crear un entorno virtual (opcional pero recomendado)
 
 ```bash
 python -m venv .venv
-# Linux/Mac
+```
+
+Activar el entorno:
+
+```bash
+# Linux / Mac
 source .venv/bin/activate
+
 # Windows
 .venv\Scripts\activate
 ```
 
+Una vez activado, el prompt debería indicar que estás dentro del entorno virtual.
+
+---
+
 ### 3. Instalar dependencias
+
+Primero, actualizar `pip`:
+
 ```bash
-python.exe -m pip install --upgrade pip
+python -m pip install --upgrade pip
+```
+
+Luego instalar las dependencias necesarias:
+
+```bash
 pip install pandas numpy matplotlib statsmodels python-dotenv a5-client openpyxl streamlit
 ```
 
-## Configurar credenciales A5
-El sistema utiliza `python-dotenv` para leer parámetros desde un archivo `.env`.
+---
 
-Crear `.env` en la raíz del proyecto:
+## Configurar credenciales A5
+
+El sistema utiliza **python-dotenv** para leer parámetros desde un archivo `.env`.
+
+1. Crear un archivo `.env` en la raíz del proyecto.
+2. Agregar el siguiente contenido:
 
 ```env
 A5_URL="https://alerta.ina.gob.ar/a6"
 A5_TOKEN="tu-token"
 ```
+---
 
-## Cómo ejecutar el hindcast
+## Ejecutar la aplicación
 
-El pipeline completo se ejecuta con:
+Perfecto 👍
+Te dejo **la sección corregida**, clara para usuario nuevo y diferenciando **Windows / Linux**, sin mencionar `streamlit run` directamente (queda implícito en los scripts).
 
-```bash
-python run_hindcast.py
+---
+
+## Ejecutar la aplicación
+
+### Windows
+
+1. Ir a la carpeta del proyecto.
+2. Hacer doble clic en el archivo:
+
+```
+iniciar_tablero.bat
 ```
 
 El script:
 
-1. Descarga series desde A5.
-2. Limpia y unifica las series en
-   `resultados/series_nivel_union_h.csv`
-3. Evalúa estaciones predictoras.
-4. Corre el hindcast diario para ventanas móviles anual + 3 meses.
-5. Guarda resultados en:
-   `resultados`
-6. Guarda el log completo en:
-   `logs/hindcast_logs.txt`
+* Activa el entorno virtual
+* Ejecuta la aplicación
+* Abre el tablero automáticamente en el navegador
 
 ---
 
-## Cómo generar gráficos de evaluación
+### Linux / Mac
 
-Después de ejecutar el hindcast:
+1. Abrir una terminal en la carpeta del proyecto.
+2. Ejecutar:
 
 ```bash
-python plot_hindcast.py
+./iniciar_tablero.sh
 ```
 
-Genera todos los graficos.
+Si es la primera vez y aparece un error de permisos:
 
+```bash
+chmod +x iniciar_tablero.sh
+```
 
-## Limpieza de series
+Luego volver a ejecutar el script.
 
-Los parámetros de limpieza se controlan desde un diccionario por estación:
+---
 
-* Ventanas a eliminar
-* Corrimientos verticales
-* Rango de outliers
-* Parámetros para detección de saltos
-* Gráficos rápidos para inspección
+# Guía de uso
 
-Cada estación se limpia de acuerdo a su sección en `PARAMS_LIMPIEZA`.
+## ¿Qué hace esta aplicación?
 
-## Logging
-Todo el logging del flujo principal se envía solo a archivo, a logs/hindcast_logs.txt.
+Este tablero permite:
+
+* Descargar series horarias de **nivel hidrométrico** desde la API A5 (INA)
+* Limpiar y unificar las series (outliers, saltos, huecos cortos)
+* Estimar el **lag temporal** entre estaciones upstream y la estación objetivo
+* Ajustar modelos simples nivel–nivel con lag
+* Generar un **pronóstico operativo** para la estación objetivo
+  (**Misión La Paz**), mostrando la última semana y el pronóstico futuro
+
+La aplicación está pensada para **uso operativo**, no para edición de código.
+
+---
+
+## Requisitos
+
+* Acceso a la API A5 del INA
+* Un **A5_TOKEN** válido
+
+---
+
+## Estructura general de la app
+
+La app se usa en **3 pasos secuenciales**:
+
+1. Descarga y limpieza de series
+2. Estimación de lags
+3. Ajuste, diagnóstico y pronóstico operativo
+
+---
+
+## Configuración inicial
+
+En la barra lateral:
+
+1. Ingresar el **A5_TOKEN**
+2. La URL del servicio A5 es fija
+
+---
+
+## Paso 1 — Descargar y limpiar series
+
+1. Seleccionar el período **Desde / Hasta**
+2. Presionar **“Descargar + limpiar (construir df_union)”**
+
+La aplicación:
+
+* Descarga las series desde A5
+* Aplica limpieza automática
+* Remuestrea a paso horario (1H)
+
+### Resultados
+
+* Vista previa de las series
+* Gráfico temporal sin aplicar lag
+* Archivos guardados automáticamente en la carpeta:
+
+  ```
+  resultados/
+  ```
+
+### Descargas
+
+* **Descargar CSV (series limpias)**
+  Guarda el archivo en la **carpeta Descargas del navegador**
+
+---
+
+## Paso 2 — Estimar lag por estación
+
+1. Definir la ventana temporal para estimar el lag
+2. Ajustar:
+   * `max_lag`: lag máximo a evaluar (en horas)
+   * `ini_lag`: lag mínimo
+3. Presionar **“Estimar lag óptimo”**
+
+### Resultados
+
+* Tabla con el lag estimado por estación
+* Posibilidad de editar manualmente el `lag_manual`
+* Gráfico con las series alineadas según el lag
+
+---
+
+## Paso 3 — Ajuste, diagnóstico y pronóstico
+
+### Selección de estaciones
+
+* Elegir hasta **2 estaciones upstream**
+* Se muestra el **lag adoptado** para cada una
+
+---
+
+### Ventana de ajuste (calibración)
+
+* Definir el período que se usará para **ajustar los modelos**
+* Esta ventana se utiliza tanto para:
+
+  * el diagnóstico
+  * el pronóstico operativo
+
+---
+
+### Diagnóstico
+
+Permite:
+
+* Ver métricas del ajuste (R², n, coeficientes)
+* Gráfico temporal de ajuste
+* Scatter Observado vs Ajustado
+
+---
+
+### Operativo — Última semana + pronóstico
+
+La app:
+
+* Ajusta los modelos usando la ventana de calibración
+* Muestra:
+
+  * Observado de la última semana
+  * Ajuste reciente
+  * Pronóstico futuro
+* Marca el instante de **emisión del pronóstico**
+
+### Resultados
+
+* Tabla **Resumen modelos**
+* Gráfico final operativo
+* Botón **Descargar CSV** con la serie final
+
+---
+
+## Notas importantes
+
+* El paso temporal es **horario (1H)** y no es configurable
+* Los lags se interpretan siempre en **horas**
+* Los botones de descarga guardan archivos en la carpeta **Descargas**
+* Los archivos generados automáticamente se guardan en `resultados/`

@@ -14,9 +14,13 @@ def plot_timeseries_daily_grid(
     figsize=(12, 4),
 ) -> plt.Figure:
     """
-    Plot con:
-    - ticks mayores mensuales (labels)
-    - grilla menor diaria en X (líneas verticales)
+    Plot con eje X adaptativo según el largo de la ventana temporal:
+    - ventanas cortas: labels horarias (dd/mm + hora)
+    - ventanas medias: labels diarias / semanales
+    - ventanas largas: labels mensuales / anuales
+    Además:
+    - grilla mayor suave
+    - grilla menor fina en X
     """
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -29,11 +33,51 @@ def plot_timeseries_daily_grid(
         ax.set_title(title)
     ax.legend()
 
-    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    # --------- EJE X DINÁMICO SEGÚN RANGO ---------
+    if df is not None and len(df.index) >= 2:
+        idx = pd.DatetimeIndex(df.index).sort_values()
+        span = idx.max() - idx.min()
+        span_days = span / pd.Timedelta(days=1)
 
-    ax.xaxis.set_minor_locator(mdates.DayLocator(interval=1))
+        if span_days <= 2:
+            # ticks cada 6h (labels) + grilla cada 1h
+            ax.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m\n%H:%M"))
+            ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
 
+        elif span_days <= 14:
+            # ticks diarios + grilla cada 6h
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+            ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 6, 12, 18]))
+
+        elif span_days <= 90:
+            # ticks semanales + grilla diaria
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=7))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+            ax.xaxis.set_minor_locator(mdates.DayLocator(interval=1))
+
+        elif span_days <= 365 * 2:
+            # ticks mensuales + grilla semanal
+            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+            ax.xaxis.set_minor_locator(mdates.WeekdayLocator(interval=1))
+
+        else:
+            # ticks anuales + grilla mensual
+            ax.xaxis.set_major_locator(mdates.YearLocator())
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+            ax.xaxis.set_minor_locator(mdates.MonthLocator(interval=1))
+
+        # estética: sin rotación y un poco más chico
+        ax.tick_params(axis="x", labelrotation=0, labelsize=8)
+
+    else:
+        # fallback (por si df vacío o 1 punto)
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(mdates.AutoDateLocator()))
+
+    # --------- GRILLAS ---------
     ax.grid(True, which="major", axis="both", linestyle="-", alpha=0.4)
     ax.grid(True, which="minor", axis="x", linestyle=":", alpha=0.35)
 
