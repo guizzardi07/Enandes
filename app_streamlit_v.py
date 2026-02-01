@@ -124,6 +124,10 @@ if "plot_aligned_end" not in st.session_state:
 if "archivo_descarga_csv" not in st.session_state:
     st.session_state.archivo_descarga_csv = "series_limpias.csv"
 
+# shift vertical final por estación (operativo)
+if "shift_map" not in st.session_state:
+    st.session_state.shift_map = {}
+
 # Estaciones
 st.subheader("Estaciones")
 
@@ -327,11 +331,45 @@ else:
     default_lag_start = max(idx_min.date(), (idx_max - pd.Timedelta(days=365)).date())
     default_lag_end = idx_max.date()
 
+    # Sync lag window -> plot+fit
+    def _sync_windows_from_lag():
+        ls = st.session_state.get("lag_start")
+        le = st.session_state.get("lag_end")
+        if ls is None or le is None:
+            return
+
+        # opcional: asegurar orden
+        if le < ls:
+            ls, le = le, ls
+            st.session_state.lag_start = ls
+            st.session_state.lag_end = le
+
+        # Ventana gráfico (con lag)
+        st.session_state.plot_aligned_start = ls
+        st.session_state.plot_aligned_end = le
+
+        # AJUSTE (calibración)
+        st.session_state.fit_start_unif = ls
+        st.session_state.fit_end_unif = le
+
+    # defaults
+    if "lag_start" not in st.session_state:
+        st.session_state.lag_start = default_lag_start
+    if "lag_end" not in st.session_state:
+        st.session_state.lag_end = default_lag_end
+
+        
     c1, c2, c3, c4 = st.columns([1, 1, 1, 1], gap="large")
     with c1:
-        lag_start = st.date_input("Ventana lag - desde", value=default_lag_start, key="lag_start", format="DD/MM/YYYY")
+        lag_start = st.date_input(
+            "Ventana lag - desde", 
+            value=st.session_state.lag_start, 
+            key="lag_start", format="DD/MM/YYYY",on_change=_sync_windows_from_lag)
     with c2:
-        lag_end = st.date_input("Ventana lag - hasta", value=default_lag_end, key="lag_end", format="DD/MM/YYYY")
+        lag_end = st.date_input(
+            "Ventana lag - hasta", 
+            value=st.session_state.lag_end, 
+            key="lag_end",format="DD/MM/YYYY",on_change=_sync_windows_from_lag)
     with c3:
         ini_lag = st.number_input("Inicio lag (pasos)", min_value=0, max_value=200, value=10, step=1, key="ini_lag")
     with c4:
@@ -394,9 +432,8 @@ else:
         st.markdown("### Gráfico — Series con lag aplicado")
         
         if st.session_state.plot_aligned_start is None or st.session_state.plot_aligned_end is None:
-            pstart, pend = default_plot_window_from_index(df_union.index, days=90)
-            st.session_state.plot_aligned_start = pstart
-            st.session_state.plot_aligned_end = pend
+            st.session_state.plot_aligned_start = st.session_state.get("lag_start", default_lag_start)
+            st.session_state.plot_aligned_end = st.session_state.get("lag_end", default_lag_end)
 
         g1, g2 = st.columns([1, 1], gap="large")
         with g1:
@@ -458,7 +495,6 @@ else:
 
             st.caption("Todas las upstream se desplazan según su `lag_manual` (en pasos de 1H).")
 
-
 st.subheader("Paso 3 — Ajuste + diagnóstico (opcional) + operativo")
 
 if (st.session_state.df_union is None) or (st.session_state.lags_df is None):
@@ -492,19 +528,25 @@ else:
     # 3) Ventana de ajuste (calibración) — ÚNICA (se usa para todo)
     pstart, pend = default_plot_window_from_index(df_union.index, days=90)
 
+    # Inicializar AJUSTE una sola vez (y permitir que se sincronice desde la ventana lag)
+    if "fit_start_unif" not in st.session_state:
+        st.session_state.fit_start_unif = pstart
+    if "fit_end_unif" not in st.session_state:
+        st.session_state.fit_end_unif = pend
+    
     st.markdown("### Ventana de ajuste (calibración)")
     fs1, fs2 = st.columns(2, gap="large")
     with fs1:
         fit_start = st.date_input(
             "AJUSTE - desde",
-            value=pstart,
+            value=st.session_state.fit_start_unif,
             key="fit_start_unif",
             format="DD/MM/YYYY",
         )
     with fs2:
         fit_end = st.date_input(
             "AJUSTE - hasta",
-            value=pend,
+            value=st.session_state.fit_end_unif,
             key="fit_end_unif",
             format="DD/MM/YYYY",
         )
@@ -588,100 +630,139 @@ else:
     #     - usa df_fit (ventana seleccionada arriba) para calibrar
     st.markdown("### Operativo — Última semana + ajuste + pronóstico")
 
-    obs = df_union[obs_col].dropna()
-    if obs.empty:
-        st.warning("No hay observado en estación objetivo.")
-        st.stop()
 
-    t_emit = obs.index.max()
-    t_start = t_emit - pd.Timedelta(days=7)
+    # --- Ajuste final manual (shift vertical) ---
+    st.markdown("#### Ajuste final (shift vertical)")
+    st.caption("Ajuste vertical final para calzar picos: **y_modelo_shifted = y_modelo + shift** (en metros).")
+    if "shift_map" not in st.session_state:
+        st.session_state.shift_map = {}
 
-    df_week = df_union.loc[t_start:t_emit].copy()
-    obs_lastweek = df_week[obs_col].rename(f"{obs_col} (obs)")
-
-    forecasts = []
-    meta_rows = []
-
-    for est in upstream_sel:
-        lag = int(get_lag_for_station(lags_df, est, default=0))
-
-        # Ajustar modelo usando la ventana df_fit (la seleccionada arriba)
-        y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
-            df_union=df_fit,
-            est=est,
-            obs_col=obs_col,
-            lag=lag,
+    if len(upstream_sel) == 1:
+        est0 = upstream_sel[0]
+        v0 = float(st.session_state.shift_map.get(est0, 0.0))
+        v0 = st.number_input(
+            f"Shift [m] para {est0}",
+            value=v0,
+            step=0.01,
+            format="%.3f",
+            key=f"shift_m__{est0}",
         )
+        st.session_state.shift_map[est0] = float(v0)
+    else:
+        sh_cols = st.columns(len(upstream_sel), gap="large")
+        for i, est_i in enumerate(upstream_sel):
+            with sh_cols[i]:
+                vi = float(st.session_state.shift_map.get(est_i, 0.0))
+                vi = st.number_input(
+                    f"Shift [m]\n{est_i}",
+                    value=vi,
+                    step=0.01,
+                    format="%.3f",
+                    key=f"shift_m__{est_i}",
+                )
+                st.session_state.shift_map[est_i] = float(vi)
 
-        # Ajuste reciente (última semana)
-        y_hist_week = forecast_from_upstream(
-            df=df_week,
-            est=est,
-            obs_col=obs_col,
-            lag=lag,
-            modelo=modelo,
-            freq="1h",
+        obs = df_union[obs_col].dropna()
+        if obs.empty:
+            st.warning("No hay observado en estación objetivo.")
+            st.stop()
+
+        t_emit = obs.index.max()
+        t_start = t_emit - pd.Timedelta(days=7)
+
+        df_week = df_union.loc[t_start:t_emit].copy()
+        obs_lastweek = df_week[obs_col].rename(f"{obs_col} (obs)")
+
+        forecasts = []
+        meta_rows = []
+
+        for est in upstream_sel:
+            lag = int(get_lag_for_station(lags_df, est, default=0))
+
+            # Ajustar modelo usando la ventana df_fit (la seleccionada arriba)
+            y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
+                df_union=df_fit,
+                est=est,
+                obs_col=obs_col,
+                lag=lag,
+            )
+
+            # Ajuste reciente (última semana)
+            y_hist_week = forecast_from_upstream(
+                df=df_week,
+                est=est,
+                obs_col=obs_col,
+                lag=lag,
+                modelo=modelo,
+                freq="1h",
+            )
+
+            # Pronóstico futuro
+            y_fcst = forecast_horizon_from_upstream_last(
+                df_union=df_union,
+                est=est,
+                obs_col=obs_col,
+                lag=lag,
+                modelo=modelo,
+                freq="1h",
+            )
+
+            # Curva continua: semana previa + futuro
+            y_full = pd.concat([y_hist_week.loc[:t_emit], y_fcst.loc[y_fcst.index > t_emit]])
+            y_full = y_full[~y_full.index.duplicated(keep="first")]
+            
+            # aplicar shift vertical final (si el usuario lo definió)
+            shift_m = float(st.session_state.get("shift_map", {}).get(est, 0.0))
+            if shift_m != 0.0:
+                y_full = y_full + shift_m
+
+            y_full = y_full.rename(f"Modelo ({est}, lag {lag}h, shift {shift_m:+.3f}m)")
+            forecasts.append(y_full)
+
+            meta_rows.append(
+                {
+                    "Estacion": est,
+                    "lag_adoptado_h": lag,
+                    "R2_ajuste": float(getattr(modelo, "rsquared", float("nan"))),
+                    "n_ajuste": int(getattr(modelo, "nobs", 0)),
+                    "const": float(modelo.params.get("const", np.nan)),
+                    "beta_up_lag": float(modelo.params.get("up_lag", np.nan)),
+                    "shift_m": float(st.session_state.get("shift_map", {}).get(est, 0.0)),
+                }
+            )
+
+        meta = pd.DataFrame(meta_rows)
+        st.markdown("#### Resumen modelos")
+        st.dataframe(meta, width="stretch")
+
+        df_final = pd.concat([obs_lastweek] + forecasts, axis=1)
+
+        fig = plot_timeseries_daily_grid(
+            df_final,
+            ylabel="Nivel",
+            title="Observado (última semana) + modelo (ajuste + pronóstico)",
         )
-
-        # Pronóstico futuro
-        y_fcst = forecast_horizon_from_upstream_last(
-            df_union=df_union,
-            est=est,
-            obs_col=obs_col,
-            lag=lag,
-            modelo=modelo,
-            freq="1h",
+        ax = fig.axes[0]
+        ax.axvline(t_emit, linestyle="--", linewidth=1)
+        ax.text(
+            t_emit,
+            ax.get_ylim()[1],
+            " Emisión prono",
+            va="top",
+            ha="left",
+            fontsize=8,
         )
+        st.pyplot(fig, width="stretch")
 
-        # Curva continua: semana previa + futuro
-        y_full = pd.concat([y_hist_week.loc[:t_emit], y_fcst.loc[y_fcst.index > t_emit]])
-        y_full = y_full[~y_full.index.duplicated(keep="first")]
-        y_full = y_full.rename(f"Modelo ({est}, lag {lag}h)")
-        forecasts.append(y_full)
+        # Descarga SOLO CSV
+        st.markdown("#### Descargar (CSV)")
+        df_export = df_final.copy()
+        df_export.index.name = "Fecha"
+        df_export = df_export.reset_index()
 
-        meta_rows.append(
-            {
-                "Estacion": est,
-                "lag_adoptado_h": lag,
-                "R2_ajuste": float(getattr(modelo, "rsquared", float("nan"))),
-                "n_ajuste": int(getattr(modelo, "nobs", 0)),
-                "const": float(modelo.params.get("const", np.nan)),
-                "beta_up_lag": float(modelo.params.get("up_lag", np.nan)),
-            }
+        st.download_button(
+            "Descargar CSV",
+            data=df_to_csv_bytes(df_export, index=False),
+            file_name="ultima_semana_ajuste_y_pronostico.csv",
+            mime="text/csv",
         )
-
-    meta = pd.DataFrame(meta_rows)
-    st.markdown("#### Resumen modelos")
-    st.dataframe(meta, width="stretch")
-
-    df_final = pd.concat([obs_lastweek] + forecasts, axis=1)
-
-    fig = plot_timeseries_daily_grid(
-        df_final,
-        ylabel="Nivel",
-        title="Observado (última semana) + modelo (ajuste + pronóstico)",
-    )
-    ax = fig.axes[0]
-    ax.axvline(t_emit, linestyle="--", linewidth=1)
-    ax.text(
-        t_emit,
-        ax.get_ylim()[1],
-        " Emisión prono",
-        va="top",
-        ha="left",
-        fontsize=8,
-    )
-    st.pyplot(fig, width="stretch")
-
-    # Descarga SOLO CSV
-    st.markdown("#### Descargar (CSV)")
-    df_export = df_final.copy()
-    df_export.index.name = "Fecha"
-    df_export = df_export.reset_index()
-
-    st.download_button(
-        "Descargar CSV",
-        data=df_to_csv_bytes(df_export, index=False),
-        file_name="ultima_semana_ajuste_y_pronostico.csv",
-        mime="text/csv",
-    )

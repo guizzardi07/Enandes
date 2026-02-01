@@ -21,4 +21,4 @@ if ! command -v streamlit &> /dev/null; then
 fi
 
 # Lanzar Streamlit
-streamlit run app_streamlit_v1.py
+streamlit run app_streamlit_v4.py
