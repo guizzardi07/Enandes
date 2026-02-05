@@ -1,5 +1,20 @@
 # Tablero de Control – Pilcomayo
 
+## ¿Qué hace esta aplicación?
+
+Este tablero permite construir un **pronóstico operativo de niveles** para la estación
+**Misión La Paz**, a partir de estaciones aguas arriba, mediante un flujo reproducible que incluye:
+
+- Descarga de series horarias desde la API A5 (INA)
+- Limpieza automática de series (outliers, saltos, huecos cortos)
+- Unificación de series a paso **horario (1H)**
+- Estimación del **lag temporal** entre estaciones
+- Ajuste de modelos lineales nivel–nivel con lag
+- Pronóstico operativo mostrando:
+  - última semana observada
+  - ajuste reciente
+  - pronóstico futuro
+
 ## Instalación
 
 ### 0. Instalar Python
@@ -88,13 +103,6 @@ A5_TOKEN="tu-token"
 
 ## Ejecutar la aplicación
 
-Perfecto 👍
-Te dejo **la sección corregida**, clara para usuario nuevo y diferenciando **Windows / Linux**, sin mencionar `streamlit run` directamente (queda implícito en los scripts).
-
----
-
-## Ejecutar la aplicación
-
 ### Windows
 
 1. Ir a la carpeta del proyecto.
@@ -132,28 +140,6 @@ Luego volver a ejecutar el script.
 ---
 
 # Guía de uso
-
-## ¿Qué hace esta aplicación?
-
-Este tablero permite:
-
-* Descargar series horarias de **nivel hidrométrico** desde la API A5 (INA)
-* Limpiar y unificar las series (outliers, saltos, huecos cortos)
-* Estimar el **lag temporal** entre estaciones upstream y la estación objetivo
-* Ajustar modelos simples nivel–nivel con lag
-* Generar un **pronóstico operativo** para la estación objetivo
-  (**Misión La Paz**), mostrando la última semana y el pronóstico futuro
-
-La aplicación está pensada para **uso operativo**, no para edición de código.
-
----
-
-## Requisitos
-
-* Acceso a la API A5 del INA
-* Un **A5_TOKEN** válido
-
----
 
 ## Estructura general de la app
 
