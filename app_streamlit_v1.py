@@ -338,19 +338,29 @@ else:
         if ls is None or le is None:
             return
 
-        # opcional: asegurar orden
-        if le < ls:
-            ls, le = le, ls
-            st.session_state.lag_start = ls
-            st.session_state.lag_end = le
+        # # opcional: asegurar orden
+        # if le < ls:
+        #     ls, le = le, ls
+        #     st.session_state.lag_start = ls
+        #     st.session_state.lag_end = le
 
-        # Ventana gráfico (con lag)
-        st.session_state.plot_aligned_start = ls
-        st.session_state.plot_aligned_end = le
+        # # Ventana gráfico (con lag)
+        # st.session_state.plot_aligned_start = ls
+        # st.session_state.plot_aligned_end = le
 
-        # AJUSTE (calibración)
-        st.session_state.fit_start_unif = ls
-        st.session_state.fit_end_unif = le
+        # # AJUSTE (calibración)
+        # st.session_state.fit_start_unif = ls
+        # st.session_state.fit_end_unif = le
+
+        ls_ord = min(ls, le)
+        le_ord = max(ls, le)
+
+        st.session_state.plot_aligned_start = ls_ord
+        st.session_state.plot_aligned_end = le_ord
+        st.session_state.fit_start_unif = ls_ord
+        st.session_state.fit_end_unif = le_ord
+
+
 
     # defaults
     if "lag_start" not in st.session_state:
@@ -363,12 +373,12 @@ else:
     with c1:
         lag_start = st.date_input(
             "Ventana lag - desde", 
-            value=st.session_state.lag_start, 
+            #value=st.session_state.lag_start, 
             key="lag_start", format="DD/MM/YYYY",on_change=_sync_windows_from_lag)
     with c2:
         lag_end = st.date_input(
             "Ventana lag - hasta", 
-            value=st.session_state.lag_end, 
+            #value=st.session_state.lag_end, 
             key="lag_end",format="DD/MM/YYYY",on_change=_sync_windows_from_lag)
     with c3:
         ini_lag = st.number_input("Inicio lag (pasos)", min_value=0, max_value=200, value=10, step=1, key="ini_lag")
@@ -539,14 +549,14 @@ else:
     with fs1:
         fit_start = st.date_input(
             "AJUSTE - desde",
-            value=st.session_state.fit_start_unif,
+            #value=st.session_state.fit_start_unif,
             key="fit_start_unif",
             format="DD/MM/YYYY",
         )
     with fs2:
         fit_end = st.date_input(
             "AJUSTE - hasta",
-            value=st.session_state.fit_end_unif,
+            #value=st.session_state.fit_end_unif,
             key="fit_end_unif",
             format="DD/MM/YYYY",
         )

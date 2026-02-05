@@ -15,7 +15,7 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "data") -> bytes:
 
 def df_to_csv_bytes(df: pd.DataFrame, index: bool = True) -> bytes:
     """Convierte DF a bytes CSV UTF-8 (para st.download_button)."""
-    return df.to_csv(index=index).encode("utf-8")
+    return df.to_csv(index=index).encode("utf-8-sig")
 
 
 def safe_filename(name: str, default: str) -> str:
