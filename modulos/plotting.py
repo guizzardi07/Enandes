@@ -24,8 +24,34 @@ def plot_timeseries_daily_grid(
     """
     fig, ax = plt.subplots(figsize=figsize)
 
+    '''
     for col in df.columns:
         ax.plot(df.index, df[col], label=str(col))
+    '''
+
+    COLOR_MAP = {
+        "Misión La Paz": "red",
+        "Villa Montes": "green",
+        "Puente Aruma": "violet",
+    }
+
+    for col in df.columns:
+        # Detectar nombre base de estación (por si tiene sufijos)
+        base_name = str(col)
+
+        # Si viene algo como "Villa Montes (aligned +10)"
+        for est in COLOR_MAP:
+            if est in base_name:
+                ax.plot(
+                    df.index,
+                    df[col],
+                    label=base_name,
+                    color=COLOR_MAP[est],
+                )
+                break
+        else:
+            # color por defecto si no está en el mapping
+            ax.plot(df.index, df[col], label=base_name)
 
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Fecha")
