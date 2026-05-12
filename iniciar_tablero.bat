@@ -7,6 +7,6 @@ IF EXIST ".venv\Scripts\activate.bat" (
 )
 
 REM Lanzar Streamlit
-streamlit run app_streamlit_v3.py
+streamlit run app_Prono_MLP.py
 
 pause

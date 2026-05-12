@@ -65,7 +65,7 @@ class StationConfig:
     """Parámetros de la estación y de la descarga desde A5."""
 
     nombre: str = "Puerto Pilcomayo"
-    id_serie: int = 32025
+    id_serie: int = 42293 # 42293   32025
     id_serie_hist: int = 6362   # 29998 42293  
     fecha_desde: str = "1980-01-01 01:00:00"
     fecha_hasta: str = "2026-05-08 09:00:00"
@@ -589,8 +589,8 @@ def prepare_regular_series(
         rolling_window=3,
     )
 
-    logger.info("Año hidrológico de referencia: %s", hyd_stats["hyd_year_ref"].iloc[0])
-    logger.info("\n%s", hyd_stats.tail(10))
+    # logger.info("Año hidrológico de referencia: %s", hyd_stats["hyd_year_ref"].iloc[0])
+    # logger.info("\n%s", hyd_stats.tail(10))
 
     # Grafica el minimo anual elegido y su tendencia suavizada
     # plot_hydrological_minimums(
@@ -687,7 +687,7 @@ def forecast_persistence(
         raise ValueError("No hay datos históricos para calcular el cuantil")
 
     selected_quantile = (same_month_values < selected_value).mean()
-    logger.info("Cuantil del mes seleccionado: %.3f", selected_quantile)
+    # logger.info("Cuantil del mes seleccionado: %.3f", selected_quantile)
 
     records = []
     for horizon in range(1, forecast_length + 1):
@@ -706,14 +706,14 @@ def forecast_persistence(
             }
         )
 
-        logger.info(
-            "Mes %s | q=%.6f | prono=%.3f | q_check=%.3f | n=%s",
-            forecast_month,
-            selected_quantile,
-            forecast_value,
-            (historical_values < forecast_value).mean(),
-            len(historical_values),
-        )
+        # logger.info(
+        #     "Mes %s | q=%.6f | prono=%.3f | q_check=%.3f | n=%s",
+        #     forecast_month,
+        #     selected_quantile,
+        #     forecast_value,
+        #     (historical_values < forecast_value).mean(),
+        #     len(historical_values),
+        # )
 
 
 
