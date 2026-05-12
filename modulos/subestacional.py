@@ -56,7 +56,7 @@ MONTH_NAMES = {
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
-    #force=True,
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -65,9 +65,10 @@ class StationConfig:
     """Parámetros de la estación y de la descarga desde A5."""
 
     nombre: str = "Puerto Pilcomayo"
-    id_serie: int = 29998   # 29998 42293
+    id_serie: int = 32025
+    id_serie_hist: int = 6362   # 29998 42293  
     fecha_desde: str = "1980-01-01 01:00:00"
-    fecha_hasta: str = "2020-01-01 09:00:00"
+    fecha_hasta: str = "2026-05-08 09:00:00"
     variable: str = "valor"
 
 @dataclass
@@ -177,9 +178,15 @@ def download_a5_series(client: Crud, station: StationConfig) -> pd.DataFrame:
     df = observacionesListToDataFrame(raw["observaciones"])
 
     if df.empty:
-        raise ValueError(f"La serie {station.id_serie} no tiene datos")
+        raise ValueError(f"La serie {station.id_serie} no tiene datos")    
 
-    return ensure_datetime_index(df)
+    raw_hist = client.readSerie(station.id_serie_hist, timestart, timeend)
+    df_hist = observacionesListToDataFrame(raw_hist["observaciones"])
+
+    if df_hist.empty:
+        raise ValueError(f"La serie {station.id_serie_hist} no tiene datos")
+
+    return ensure_datetime_index(df), ensure_datetime_index(df_hist)
 
 def normalize_value_column(df: pd.DataFrame, value_col: str) -> pd.DataFrame:
     """
@@ -260,18 +267,54 @@ def regularize_series(
     timeend: Optional[Any] = None,
     interpolate: bool = True,
     interpolation_limit: int = 1,
+    daily_normalize: bool = True,
 ) -> pd.DataFrame:
     """Lleva la serie a paso regular e interpola huecos cortos."""
+
     if column not in df.columns:
         raise KeyError(f"No existe la columna {column!r}")
 
     data = ensure_datetime_index(df)
+
+    if daily_normalize:
+        data = data.copy()
+
+        # Quitar timezone antes de normalizar evita NonExistentTimeError
+        # por cambios históricos de huso horario.
+        data.index = data.index.tz_localize(None).normalize()
+
+        data = (
+            data.groupby(data.index)
+            .agg({column: "mean"})
+            .sort_index()
+        )
+
     start = timestart if timestart is not None else data.index.min()
     end = timeend if timeend is not None else data.index.max()
 
-    regular_index = create_regular_index(start, end, freq)
+    if daily_normalize:
+        start = pd.Timestamp(start)
+        end = pd.Timestamp(end)
+
+        if start.tzinfo is not None:
+            start = start.tz_localize(None)
+        if end.tzinfo is not None:
+            end = end.tz_localize(None)
+
+        start = start.normalize()
+        end = end.normalize()
+
+        regular_index = pd.date_range(
+            start=start,
+            end=end,
+            freq=freq,
+        )
+
+    else:
+        regular_index = create_regular_index(start, end, freq)
+
     out = pd.DataFrame(index=regular_index)
-    out = out.join(data, how="left")
+    out = out.join(data[[column]], how="left")
 
     if interpolate:
         out[column] = out[column].interpolate(
@@ -292,21 +335,229 @@ def add_time_variables(df: pd.DataFrame) -> pd.DataFrame:
     out.insert(4, "wkDay", out.index.isocalendar().week.astype(int))
     return out
 
+def hyd_year(dts: pd.Series | pd.DatetimeIndex) -> np.ndarray:
+    """Año hidrológico que arranca el 1/6: Jun-Dic -> año+1, Ene-May -> año."""
+    dts = pd.to_datetime(dts)
+    return np.where(dts.month >= 6, dts.year + 1, dts.year)
+
+def merge_current_and_historical(
+    current: pd.DataFrame,
+    historical: pd.DataFrame,
+    value_col: str,
+) -> pd.DataFrame:
+    """
+    Combina serie actual e histórica.
+
+    Prioridad:
+    1. Serie actual.
+    2. Serie histórica para completar huecos.
+    """
+    cur = current[[value_col]].copy().rename(columns={value_col: "actual"})
+    hist = historical[[value_col]].copy().rename(columns={value_col: "historica"})
+
+    out = hist.join(cur, how="outer")
+    out[value_col] = out["actual"].combine_first(out["historica"])
+
+    return out[[value_col]].sort_index()
+
+def get_last_complete_hyd_year(
+    df: pd.DataFrame,
+    value_col: str,
+    min_valid_days: int = 300,
+) -> int:
+    """
+    Devuelve el último año hidrológico cerrado con datos suficientes.
+    """
+    today = pd.Timestamp.now(tz=TIMEZONE)
+
+    # Año hidrológico actual: si estamos entre junio y diciembre, es año+1.
+    current_hy = today.year + 1 if today.month >= 6 else today.year
+
+    valid_counts = (
+        df.loc[df["hyd_year"] < current_hy]
+        .groupby("hyd_year")[value_col]
+        .count())
+    
+    valid_counts = valid_counts[valid_counts >= min_valid_days]
+
+    if valid_counts.empty:
+        raise ValueError("No hay años hidrológicos cerrados con datos suficientes")
+
+    return int(valid_counts.index.max())
+
+def compute_hyd_year_minimum_trend(
+    df: pd.DataFrame,
+    value_col: str,
+    q: float = 0.02,
+    min_valid_days: int = 300,
+    rolling_window: int = 3,
+) -> pd.DataFrame:
+    """
+    Calcula el percentil bajo anual y una tendencia suave mediante mediana móvil.
+    """
+    stats = (
+        df.groupby("hyd_year")[value_col]
+        .agg(
+            n_valid="count",
+            p02=lambda s: s.quantile(q),
+        )
+        .reset_index()
+    )
+
+    stats.loc[stats["n_valid"] < min_valid_days, "p02"] = np.nan
+
+    stats["p02_suavizado"] = (
+        stats["p02"]
+        .rolling(window=rolling_window, center=True, min_periods=1)
+        .median()
+    )
+
+    return stats
+
+def adjust_series_to_current_hydraulic_level(
+    df: pd.DataFrame,
+    value_col: str,
+    q: float = 0.02,
+    min_valid_days: int = 300,
+    rolling_window: int = 3,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Corrige la serie por desplazamiento vertical usando la tendencia suavizada
+    del mínimo anual hidrológico.
+
+    La referencia es el último año hidrológico cerrado con datos suficientes.
+    """
+    out = df.copy()
+
+    out["hyd_year"] = hyd_year(out.index)
+
+    stats = compute_hyd_year_minimum_trend(
+        out,
+        value_col=value_col,
+        q=q,
+        min_valid_days=min_valid_days,
+        rolling_window=rolling_window,
+    )
+
+    ref_hy = get_last_complete_hyd_year(
+        out,
+        value_col=value_col,
+        min_valid_days=min_valid_days,
+    )
+
+    ref_value = stats.loc[
+        stats["hyd_year"] == ref_hy,
+        "p02_suavizado"
+    ].iloc[0]
+
+    stats["hyd_year_ref"] = ref_hy
+    stats["p02_ref"] = ref_value
+    stats["offset"] = stats["p02_ref"] - stats["p02_suavizado"]
+
+    out = out.merge(
+        stats[["hyd_year", "p02", "p02_suavizado", "offset"]],
+        on="hyd_year",
+        how="left",
+    )
+
+    out.index = df.index
+    out[f"{value_col}_corr"] = out[value_col] + out["offset"]
+
+    return out, stats
+
+def plot_hydrological_minimums(
+    stats: pd.DataFrame,
+    station_name: str,
+    q: float = 0.02,
+) -> None:
+    """
+    Grafica el percentil bajo anual y su tendencia suavizada.
+    """
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    ax.plot(
+        stats["hyd_year"],
+        stats["p02"],
+        marker="o",
+        linewidth=1.5,
+        label=f"P{int(q*100)} anual",
+    )
+
+    ax.plot(
+        stats["hyd_year"],
+        stats["p02_suavizado"],
+        marker="s",
+        linewidth=3,
+        label="Tendencia suavizada",
+    )
+
+    # Año de referencia
+    if "hyd_year_ref" in stats.columns:
+        ref_year = stats["hyd_year_ref"].iloc[0]
+
+        ax.axvline(
+            ref_year,
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Año referencia: {ref_year}",
+        )
+
+    ax.set_title(
+        f"{station_name} - Evolución del mínimo hidráulico"
+    )
+
+    ax.set_xlabel("Año hidrológico")
+    ax.set_ylabel("Nivel [m]")
+
+    ax.grid(
+        True,
+        which="both",
+        color="0.75",
+        linestyle="-.",
+        linewidth=0.4,
+    )
+
+    ax.legend(loc="best")
+
+    # plt.show()
+    # plt.close(fig)
+    return fig
+
 def prepare_regular_series(
     station: StationConfig,
     cleaning: CleaningConfig,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Descarga, limpia, regulariza y agrega variables temporales."""
-    client = get_a5_client()
-    raw_series = download_a5_series(client, station)
-    raw_series = normalize_value_column(raw_series, station.variable)
+    """
+    Descarga, combina serie actual e histórica, limpia, regulariza,
+    corrige por mínimo hidráulico y agrega variables temporales.
 
+    Devuelve:
+    - serie regular corregida
+    - outliers detectados
+    - tabla de estadísticos por año hidrológico
+    """
+    client = get_a5_client()
+    raw_series, raw_hist = download_a5_series(client, station)
+
+    raw_series = normalize_value_column(raw_series, station.variable)
+    raw_hist = normalize_value_column(raw_hist, station.variable)
+
+    # 1. Combinar histórica + actual, priorizando la actual.
+    combined_series = merge_current_and_historical(
+        current=raw_series,
+        historical=raw_hist,
+        value_col=station.variable,
+    )
+
+    # 2. Limpiar outliers sobre la serie combinada original.
     outliers, clean_series = remove_outliers(
-        raw_series,
+        combined_series,
         limits=cleaning.limite_outliers,
         column=station.variable,
     )
 
+    # 3. Regularizar e interpolar huecos cortos.
     regular_series = regularize_series(
         clean_series,
         freq=cleaning.intervalo,
@@ -314,9 +565,52 @@ def prepare_regular_series(
         interpolation_limit=cleaning.interpolation_limit,
     )
 
-    regular_series = add_time_variables(regular_series)
-    return regular_series, outliers
+    # print(combined_series)
+    # print(clean_series)
+    # print(regular_series)
 
+    # fig, ax = plt.subplots(figsize=(15, 8))
+    # ax.plot(combined_series.index, combined_series[station.variable], label="combined_series")
+    # ax.scatter(clean_series.index, clean_series[station.variable], label="clean_series")
+    # ax.plot(regular_series.index, regular_series[station.variable], label="regular_series")
+
+
+    # ax.grid(True, which="both", color="0.75", linestyle="-.", linewidth=0.4)
+    # ax.legend(loc="best")
+    # plt.show()
+    # quit()
+
+    # 4. Corregir la serie regularizada al nivel hidráulico actual.
+    corrected_series, hyd_stats = adjust_series_to_current_hydraulic_level(
+        regular_series,
+        value_col=station.variable,
+        q=0.02,
+        min_valid_days=300,
+        rolling_window=3,
+    )
+
+    logger.info("Año hidrológico de referencia: %s", hyd_stats["hyd_year_ref"].iloc[0])
+    logger.info("\n%s", hyd_stats.tail(10))
+
+    # Grafica el minimo anual elegido y su tendencia suavizada
+    # plot_hydrological_minimums(
+    #     hyd_stats,
+    #     station_name=station.nombre,
+    #     q=0.02,
+    # )
+
+    # 5. Usar la columna corregida como variable principal para el resto del flujo.
+    value_col_corr = f"{station.variable}_corr"
+    
+    corrected_series[station.variable] = corrected_series[value_col_corr]
+
+    # 6. Dejar solo columnas útiles para el resto del script.
+    corrected_series = corrected_series[[station.variable]].copy()
+
+    # 7. Agregar variables temporales.
+    corrected_series = add_time_variables(corrected_series)
+
+    return corrected_series, outliers, hyd_stats
 
 # Resampleo mensual
 def resample_series(
@@ -326,7 +620,7 @@ def resample_series(
     min_count: int = 25,
 ) -> pd.DataFrame:
     """
-    Calcula el promedio por año y ventana temporal.
+    Calcula el promedio por año y ventana temporal: mes.
 
     Para el caso mensual, group_var='month'. Si la cantidad de datos válidos de una
     ventana es menor que min_count, el promedio se reemplaza por NaN.
@@ -344,7 +638,6 @@ def resample_series(
 
     df_resamp.loc[df_resamp["Count"] < min_count, value_col] = np.nan
     return df_resamp.round(2)
-
 
 # Persistencia de cuantiles
 def get_selected_row(
@@ -412,6 +705,17 @@ def forecast_persistence(
                 "cuantil_base": selected_quantile,
             }
         )
+
+        logger.info(
+            "Mes %s | q=%.6f | prono=%.3f | q_check=%.3f | n=%s",
+            forecast_month,
+            selected_quantile,
+            forecast_value,
+            (historical_values < forecast_value).mean(),
+            len(historical_values),
+        )
+
+
 
     return add_date_column(pd.DataFrame(records).round(2))
 
@@ -763,6 +1067,81 @@ def get_axis_label(value_col: str) -> str:
     }
     return labels.get(value_col, value_col)
 
+def plot_forecast_boxplot(
+    station_name: str,
+    recent_obs: pd.DataFrame,
+    forecast: pd.DataFrame,
+    historical: pd.DataFrame,
+    period_col: str,
+    value_col: str,
+    search_length: int,
+    forecast_col: str = "Prono",
+) -> None:
+    """Grafica boxplots históricos mensuales, observaciones recientes y pronóstico."""
+
+    months = list(range(1, 13))
+
+    box_plot_data = [
+        historical.loc[historical[period_col] == month, value_col].dropna()
+        for month in months
+    ]
+
+    box_plot_labels = [
+        MONTH_NAMES.get(month, str(month))
+        for month in months
+    ]
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+
+    ax.boxplot(
+        box_plot_data,
+        patch_artist=True,
+        labels=box_plot_labels,
+        boxprops={"fill": None},
+    )
+
+    # Observaciones recientes
+    if not recent_obs.empty:
+        ax.scatter(
+            recent_obs[period_col],
+            recent_obs[value_col],
+            s=60,
+            label=f"Últimos {search_length} meses obs.",
+            zorder=3,
+        )
+
+    # Pronóstico
+    if not forecast.empty:
+        ax.scatter(
+            forecast[period_col],
+            forecast[forecast_col],
+            s=70,
+            marker="s",
+            label="Pronóstico",
+            zorder=4,
+        )
+
+    ax.set_title(station_name)
+    ax.grid(
+        True,
+        axis="y",
+        which="both",
+        color="0.75",
+        linestyle="-.",
+        linewidth=0.3,
+    )
+
+    ax.set_xlabel("Mes", size=18)
+    ax.set_ylabel(get_axis_label(value_col), size=18)
+    ax.tick_params(axis="x", labelsize=14, rotation=20)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.legend(prop={"size": 14}, loc="best")
+    # plt.show()
+    # plt.close(fig)
+    # print(forecast[["fecha", "Prono"]])
+    # print(months)
+    return fig
+
 def plot_analogy_traces(
     traces: pd.DataFrame,
     forecast: pd.DataFrame,
@@ -784,7 +1163,7 @@ def plot_analogy_traces(
         logger.warning("No hay trazas para graficar")
         return
 
-    fig, ax = plt.subplots(figsize=(15, 8))
+    fig, ax = plt.subplots(figsize=(11, 5))
 
     analog_years = selected_analogs["YrSim"].astype(int).astype(str).tolist()
     weights = dict(zip(selected_analogs["YrSim"].astype(int).astype(str), selected_analogs["wi"]))
@@ -844,7 +1223,7 @@ def plot_forecasts_comparison(
     hist = df.iloc[max(0, idx_selected - history_months + 1) : idx_selected + 1].copy()
     hist = add_date_column(hist)
 
-    fig, ax = plt.subplots(figsize=(15, 8))
+    fig, ax = plt.subplots(figsize=(11, 5))
     ax.plot(hist["fecha"], hist[value_col], marker="o", label="Observado")
 
     if not persistence.empty:
@@ -862,6 +1241,21 @@ def plot_forecasts_comparison(
     return fig
 
 
+def get_last_valid_forecast_origin(
+    df: pd.DataFrame,
+    value_col: str,
+    period_col: str = "month",
+) -> tuple[int, int]:
+    """Devuelve el último mes con valor mensual válido."""
+    valid = df.dropna(subset=[value_col]).copy()
+
+    if valid.empty:
+        raise ValueError("No hay meses válidos para definir el origen del pronóstico")
+
+    row = valid.iloc[-1]
+    return int(row["year"]), int(row[period_col])
+
+
 # Ejecución principal
 def main() -> None:
     station = StationConfig()
@@ -876,8 +1270,9 @@ def main() -> None:
     logger.info("Estación: %s", station.nombre)
     logger.info("Origen del pronóstico: %02d/%04d", forecast_cfg.mes_select, forecast_cfg.yr_select)
 
-    serie_reg, outliers = prepare_regular_series(station, cleaning)
+    serie_reg, outliers, hyd_stats = prepare_regular_series(station, cleaning)
 
+    # Resampleo mensual
     df_resamp = resample_series(
         serie_reg,
         group_var=forecast_cfg.vent_resamp,
@@ -894,6 +1289,8 @@ def main() -> None:
     )
     logger.info("NaN mensuales: %s", df_resamp[station.variable].isna().sum())
 
+
+    # Pronóstico por persistencia de cuantiles.
     prono_persistencia = forecast_persistence(
         df=df_resamp,
         value_col=station.variable,
@@ -904,6 +1301,7 @@ def main() -> None:
         period_col=forecast_cfg.vent_resamp,
     )
 
+    # Pronóstico por analogía.
     prono_analogia, analogos, trazas, _ = forecast_analogy(
         df=df_resamp,
         value_col=station.variable,
@@ -922,10 +1320,32 @@ def main() -> None:
     print("\nAños análogos seleccionados:\n")
     print(analogos[["YrSim", "RMSE", "CoefC", "Nash", "ErrVol", "wi"]])
 
+
     if forecast_cfg.plot:
+        idx_selected, _ = get_selected_row(
+            df_resamp,
+            forecast_cfg.yr_select,
+            forecast_cfg.mes_select,
+            forecast_cfg.vent_resamp,
+        )
+
+        recent_obs = df_resamp.iloc[
+            max(0, idx_selected - forecast_cfg.long_busqueda + 1): idx_selected + 1
+        ].copy()
+
+        plot_forecast_boxplot(
+            station_name=station.nombre,
+            recent_obs=recent_obs,
+            forecast=prono_persistencia, # prono_persistencia   prono_analogia
+            historical=df_resamp,
+            period_col=forecast_cfg.vent_resamp,
+            value_col=station.variable,
+            search_length=forecast_cfg.long_busqueda,
+        )
+
         plot_analogy_traces(
             traces=trazas,
-            forecast=prono_analogia,
+            forecast=prono_analogia, # prono_persistencia   prono_analogia
             selected_analogs=analogos,
             station_name=station.nombre,
             value_col=station.variable,
@@ -944,8 +1364,5 @@ def main() -> None:
         )
 
 
-'''
-if __name__ == "__main__":
-    main()
-'''
-
+# if __name__ == "__main__":
+#     main()

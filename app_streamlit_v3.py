@@ -80,7 +80,10 @@ try:
         forecast_analogy,
         plot_analogy_traces,
         plot_forecasts_comparison,
+        plot_forecast_boxplot,
+        get_selected_row,
         infer_forecast_origin,
+        get_last_valid_forecast_origin,
         MONTH_NAMES,
     )
 except Exception as e:
@@ -97,27 +100,31 @@ def round_numeric_df(df: pd.DataFrame, decimals: int = 2) -> pd.DataFrame:
 
 
 def clean_plotly_label(col: object) -> str:
+    """Devuelve una etiqueta corta para leyenda y tooltip de Plotly."""
     label = str(col)
 
+    # Casos conocidos de estaciones. Sirve aunque la columna tenga sufijos
+    # como "(obs)", "aligned", "lag" o "shift".
     known_stations = ["Misión La Paz", "Villa Montes", "Puente Aruma"]
     for station in known_stations:
         if station in label:
             return station
 
+    # Caso general: Modelo (Nombre estación, lag 30h, shift +0.000m)
     if label.startswith("Modelo ("):
         clean = label.replace("Modelo (", "", 1)
         clean = clean.split(",", 1)[0]
         return clean.strip().rstrip(")")
 
+    # Fallback: cortar sufijos entre paréntesis.
     return label.split("(", 1)[0].strip()
 
 
 def build_interactive_timeseries(df: pd.DataFrame, title: str, ylabel: str = "Nivel") -> go.Figure:
+    """Arma un gráfico interactivo con Plotly a partir de un DataFrame indexado por fecha."""
     fig = go.Figure()
-
     for col in df.columns:
         clean_name = clean_plotly_label(col)
-
         fig.add_trace(
             go.Scatter(
                 x=df.index,
@@ -138,6 +145,102 @@ def build_interactive_timeseries(df: pd.DataFrame, title: str, ylabel: str = "Ni
         height=420,
     )
     return fig
+
+def build_interactive_subseasonal_forecast(
+    df_hist: pd.DataFrame,
+    persistence: pd.DataFrame,
+    analogy: pd.DataFrame,
+    value_col: str,
+) -> go.Figure:
+
+    fig = go.Figure()
+
+    # ---------------------------------------------------------
+    # Observado
+    # ---------------------------------------------------------
+
+    fig.add_trace(
+        go.Scatter(
+            x=df_hist["fecha"],
+            y=df_hist[value_col],
+            mode="lines+markers",
+            name="Observado",
+            hovertemplate="Observado: %{y:.2f}<extra></extra>",
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Conectar pronósticos con último observado
+    # ---------------------------------------------------------
+
+    last_obs_date = df_hist["fecha"].iloc[-1]
+    last_obs_value = df_hist[value_col].iloc[-1]
+
+    persistence_plot = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "fecha": [last_obs_date],
+                    "Prono": [last_obs_value],
+                }
+            ),
+            persistence[["fecha", "Prono"]],
+        ],
+        ignore_index=True,
+    )
+
+    analogy_plot = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "fecha": [last_obs_date],
+                    "Prono": [last_obs_value],
+                }
+            ),
+            analogy[["fecha", "Prono"]],
+        ],
+        ignore_index=True,
+    )
+
+    # ---------------------------------------------------------
+    # Persistencia
+    # ---------------------------------------------------------
+
+    fig.add_trace(
+        go.Scatter(
+            x=persistence_plot["fecha"],
+            y=persistence_plot["Prono"],
+            mode="lines+markers",
+            name="Persistencia",
+            hovertemplate="Persistencia: %{y:.2f}<extra></extra>",
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Analogía
+    # ---------------------------------------------------------
+
+    fig.add_trace(
+        go.Scatter(
+            x=analogy_plot["fecha"],
+            y=analogy_plot["Prono"],
+            mode="lines+markers",
+            name="Analogía",
+            hovertemplate="Analogía: %{y:.2f}<extra></extra>",
+        )
+    )
+
+    fig.update_layout(
+        title="Pronóstico mensual",
+        xaxis_title="Fecha",
+        yaxis_title="Nivel [m]",
+        hovermode="x unified",
+        template="plotly_white",
+        height=420,
+    )
+
+    return fig
+
 
 # UI config
 st.set_page_config(page_title="Pilcomayo - Tablero de control", layout="wide")
@@ -883,43 +986,19 @@ def render_pronostico_operativo() -> None:
 def render_pronostico_subestacional() -> None:
     st.subheader("Pronóstico hidrológico subestacional")
     st.caption(
-        "Pronóstico mensual basado en persistencia de cuantiles y analogías históricas. "
-        "Este flujo usa una descarga histórica propia, independiente del pronóstico horario operativo."
+        "Pronóstico mensual para Puerto Pilcomayo basado en persistencia de cuantiles "
+        "y analogías históricas. La serie se arma combinando la serie histórica y la serie actual."
     )
 
     if "sub_resultados" not in st.session_state:
         st.session_state.sub_resultados = None
 
     with st.expander("Configuración", expanded=True):
-        c1, c2, c3 = st.columns(3, gap="large")
-        with c1:
-            nombre_est = st.text_input("Estación", value="Puerto Pilcomayo", key="sub_nombre_est")
-            id_serie_sub = st.number_input("ID serie A5", value=29998, step=1, key="sub_id_serie")
-            variable_sub = st.text_input("Columna de valor", value="valor", key="sub_variable")
-        with c2:
-            fecha_desde_sub = st.text_input(
-                "Fecha desde",
-                value="1980-01-01 01:00:00",
-                key="sub_fecha_desde",
-            )
-            fecha_hasta_sub = st.text_input(
-                "Fecha hasta",
-                value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                key="sub_fecha_hasta",
-            )
-        with c3:
-            limite_inf = st.number_input("Límite inferior", value=1.0, key="sub_lim_inf")
-            limite_sup = st.number_input("Límite superior", value=8.0, key="sub_lim_sup")
-            min_count_mensual = st.number_input(
-                "Mínimo datos válidos por mes",
-                value=25,
-                min_value=1,
-                step=1,
-                key="sub_min_count",
-            )
 
         st.markdown("#### Parámetros del pronóstico")
+
         p1, p2, p3, p4 = st.columns(4, gap="large")
+
         with p1:
             long_busqueda = st.number_input(
                 "Meses de búsqueda",
@@ -927,7 +1006,12 @@ def render_pronostico_subestacional() -> None:
                 min_value=1,
                 step=1,
                 key="sub_long_busqueda",
+                help=(
+                    "Cantidad de meses previos usados para comparar la situación actual "
+                    "contra años históricos y buscar analogías."
+                ),
             )
+
         with p2:
             long_prono = st.number_input(
                 "Meses a pronosticar",
@@ -935,7 +1019,11 @@ def render_pronostico_subestacional() -> None:
                 min_value=1,
                 step=1,
                 key="sub_long_prono",
+                help=(
+                    "Horizonte temporal del pronóstico mensual hacia adelante."
+                ),
             )
+
         with p3:
             cantidad_analogos = st.number_input(
                 "Cantidad de análogos",
@@ -943,20 +1031,44 @@ def render_pronostico_subestacional() -> None:
                 min_value=1,
                 step=1,
                 key="sub_cant_analogos",
+                help=(
+                    "Cantidad de años históricos similares que se usan "
+                    "para construir el pronóstico por analogía."
+                ),
             )
+
         with p4:
             orden_analogos = st.selectbox(
                 "Ordenar analogías por",
                 options=["RMSE", "Score", "CoefC", "Nash", "ErrVol"],
                 index=0,
                 key="sub_orden_analogos",
+                help=(
+                    "Métrica utilizada para seleccionar los años análogos más similares."
+                ),
             )
+
+        with st.expander("Descripción de métricas", expanded=False):
+
+            st.markdown("""
+        **RMSE**: Error cuadrático medio.
+
+        **CoefC**: Coeficiente de correlación lineal.
+
+        **Nash**: Eficiencia de Nash-Sutcliffe.
+
+        **ErrVol**: Error porcentual de volumen acumulado.
+
+        **Score**:Indicador combinado que resume varias métricas de ajuste.
+        """)
+
 
         usar_origen_auto = st.checkbox(
             "Inferir mes/año de emisión automáticamente",
             value=True,
             key="sub_origen_auto",
         )
+
         if usar_origen_auto:
             yr_select, mes_select = infer_forecast_origin()
             st.info(f"Origen inferido: {MONTH_NAMES.get(mes_select, mes_select)} {yr_select}")
@@ -974,9 +1086,15 @@ def render_pronostico_subestacional() -> None:
                     key="sub_mes_select",
                 )
 
-    run_sub = st.button("Ejecutar pronóstico subestacional", type="primary", key="sub_run")
+    run_sub = st.button(
+        "Ejecutar pronóstico subestacional",
+        type="primary",
+        key="sub_run",
+    )
 
     if run_sub:
+        st.session_state.sub_resultados = None
+
         if not a5_token:
             st.error("Falta A5_TOKEN.")
         else:
@@ -984,41 +1102,96 @@ def render_pronostico_subestacional() -> None:
                 os.environ["A5_URL"] = A5_URL_FIJO
                 os.environ["A5_TOKEN"] = a5_token
 
+                # Configuración operativa fija. No se expone al usuario.
                 station = StationConfig(
-                    nombre=str(nombre_est),
-                    id_serie=int(id_serie_sub),
-                    fecha_desde=str(fecha_desde_sub),
-                    fecha_hasta=str(fecha_hasta_sub),
-                    variable=str(variable_sub),
+                    fecha_desde="1980-01-01 01:00:00",
+                    fecha_hasta=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
-                cleaning = CleaningConfig(
-                    limite_outliers=(float(limite_inf), float(limite_sup)),
-                    intervalo=timedelta(days=1),
-                    interpolation_limit=1,
-                )
+                cleaning = CleaningConfig()
+
                 forecast_cfg = ForecastConfig(
                     long_busqueda=int(long_busqueda),
                     long_prono=int(long_prono),
-                    vent_resamp="month",
-                    min_count_mensual=int(min_count_mensual),
-                    mes_select=int(mes_select),
-                    yr_select=int(yr_select),
+                    mes_select=None,
+                    yr_select=None,
                     plot=False,
                 )
+
                 analogy_cfg = AnalogyConfig(
                     orden=str(orden_analogos),
                     orden_ascending=(str(orden_analogos) in {"RMSE", "ErrVol"}),
                     cantidad=int(cantidad_analogos),
                 )
 
-                with st.spinner("Descargando serie histórica, agregando a escala mensual y calculando pronósticos..."):
-                    serie_reg, outliers = prepare_regular_series(station, cleaning)
+                forecast_cfg.yr_select, forecast_cfg.mes_select = infer_forecast_origin()
+
+                with st.spinner("Descargando series, armando serie mensual y calculando pronóstico..."):
+                    serie_reg, outliers, hyd_stats = prepare_regular_series(station, cleaning)
+
                     df_resamp = resample_series(
                         serie_reg,
                         group_var=forecast_cfg.vent_resamp,
                         value_col=station.variable,
                         min_count=forecast_cfg.min_count_mensual,
                     )
+
+                    if usar_origen_auto:
+                        yr_select, mes_select = get_last_valid_forecast_origin(
+                            df_resamp,
+                            value_col=station.variable,
+                            period_col=forecast_cfg.vent_resamp,
+                        )
+                    else:
+                        yr_select = int(yr_select)
+                        mes_select = int(mes_select)
+
+                    forecast_cfg.yr_select = int(yr_select)
+                    forecast_cfg.mes_select = int(mes_select)
+                    
+
+
+                    # st.write("Origen usado persistencia:")
+                    # st.write(forecast_cfg.yr_select, forecast_cfg.mes_select)
+
+                    # row_sel = df_resamp[
+                    #     (df_resamp["year"] == forecast_cfg.yr_select)
+                    #     & (df_resamp["month"] == forecast_cfg.mes_select)
+                    # ]
+
+                    # st.dataframe(row_sel.tail(1))
+
+                    # same_month = df_resamp[
+                    #     df_resamp["month"] == forecast_cfg.mes_select
+                    # ][station.variable]
+
+                    # selected_value = row_sel.iloc[0][station.variable]
+
+                    # q = (same_month < selected_value).mean()
+
+                    # st.write("Cuantil base:", q)
+                    
+                    # st.write("Cuantiles marzo:", df_resamp.loc[df_resamp["month"] == 3, "valor"].quantile([0.25, 0.5, 0.574, 0.75, 0.9]))
+                    
+                    # vals_mayo = df_resamp.loc[
+                    #     df_resamp["month"] == 5,
+                    #     "valor"
+                    # ].dropna()
+                    # st.write("Q25:", vals_mayo.quantile(0.25))
+                    # st.write("Q50:", vals_mayo.quantile(0.50))
+                    # st.write("Q57:", vals_mayo.quantile(q))
+                    # st.write("Q75:", vals_mayo.quantile(0.75))
+                    
+
+                    # idx_selected, _ = get_selected_row(
+                    #     df_resamp,
+                    #     2026,
+                    #     3,
+                    #     "month",
+                    # )
+
+
+
+
                     prono_persistencia = forecast_persistence(
                         df=df_resamp,
                         value_col=station.variable,
@@ -1028,6 +1201,10 @@ def render_pronostico_subestacional() -> None:
                         forecast_length=forecast_cfg.long_prono,
                         period_col=forecast_cfg.vent_resamp,
                     )
+                    # st.write("Pronóstico de persistencia:", prono_persistencia)
+                    # st.write("Pronóstico de persistencia:", prono_persistencia[["fecha", "Prono"]])
+
+
                     prono_analogia, analogos, trazas, df_obj = forecast_analogy(
                         df=df_resamp,
                         value_col=station.variable,
@@ -1040,9 +1217,11 @@ def render_pronostico_subestacional() -> None:
                 st.session_state.sub_resultados = {
                     "station": station,
                     "forecast_cfg": forecast_cfg,
-                    "df_resamp": df_resamp,
+                    "analogy_cfg": analogy_cfg,
                     "serie_reg": serie_reg,
+                    "df_resamp": df_resamp,
                     "outliers": outliers,
+                    "hyd_stats": hyd_stats,
                     "prono_persistencia": prono_persistencia,
                     "prono_analogia": prono_analogia,
                     "analogos": analogos,
@@ -1055,70 +1234,209 @@ def render_pronostico_subestacional() -> None:
 
     resultados = st.session_state.sub_resultados
     if resultados is None:
-        st.info("Configurá los parámetros y ejecutá el pronóstico subestacional.")
+        st.info("Ejecutá el pronóstico para ver los resultados.")
         return
 
     station = resultados["station"]
     forecast_cfg = resultados["forecast_cfg"]
     df_resamp = resultados["df_resamp"]
     outliers = resultados["outliers"]
+    hyd_stats = resultados["hyd_stats"]
     prono_persistencia = resultados["prono_persistencia"]
     prono_analogia = resultados["prono_analogia"]
     analogos = resultados["analogos"]
     trazas = resultados["trazas"]
 
-    st.markdown("### Serie mensual")
-    m1, m2, m3 = st.columns(3, gap="large")
-    with m1:
-        st.metric("Meses disponibles", f"{len(df_resamp):,}".replace(",", "."))
-    with m2:
-        st.metric("NaN mensuales", int(df_resamp[station.variable].isna().sum()))
-    with m3:
-        st.metric("Outliers diarios detectados", int(len(outliers)))
+    st.markdown("### Resumen")
 
-    st.dataframe(df_resamp.tail(12), width="stretch")
+    fecha_ini = pd.to_datetime(
+        dict(
+            year=[int(df_resamp.iloc[0]["year"])],
+            month=[int(df_resamp.iloc[0]["month"])],
+            day=[1],
+        )
+    ).iloc[0]
+
+    fecha_fin = pd.to_datetime(
+        dict(
+            year=[int(df_resamp.iloc[-1]["year"])],
+            month=[int(df_resamp.iloc[-1]["month"])],
+            day=[1],
+        )
+    ).iloc[0]
+
+    m1, m2, m3 = st.columns(3, gap="large")
+
+    with m1:
+        st.metric(
+            "Origen",
+            f"{MONTH_NAMES.get(forecast_cfg.mes_select, forecast_cfg.mes_select)} {forecast_cfg.yr_select}"
+        )
+
+    with m2:
+        st.metric(
+            "Serie histórica",
+            f"{fecha_ini.year}–{fecha_fin.year}"
+        )
+
+    with m3:
+        st.metric(
+            "Meses sin datos",
+            int(df_resamp[station.variable].isna().sum())
+        )
+
+    # ------------------------------------------------------------------
+    # Línea 2 — parámetros del modelo
+    # ------------------------------------------------------------------
+
+    m4, m5, m6 = st.columns(3, gap="large")
+
+    with m4:
+        st.metric(
+            "Ventana búsqueda",
+            f"{forecast_cfg.long_busqueda} meses"
+        )
+
+    with m5:
+        st.metric(
+            "Horizonte prono",
+            f"{forecast_cfg.long_prono} meses"
+        )
+
+    with m6:
+        st.metric(
+            "Cantidad de Análogos",
+            f"{analogy_cfg.cantidad}"
+        )
+
+    st.caption(
+        f"La serie mensual utilizada por el modelo abarca desde "
+        f"{fecha_ini.strftime('%m/%Y')} hasta {fecha_fin.strftime('%m/%Y')}."
+    )
+
+    st.caption(
+        f"La búsqueda de analogías utiliza los "
+        f"{forecast_cfg.long_busqueda} meses previos al origen del pronóstico."
+    )
+
 
     st.markdown("### Pronóstico")
     c1, c2 = st.columns(2, gap="large")
     with c1:
         st.markdown("#### Persistencia")
         st.dataframe(
-            prono_persistencia[["fecha", "horizonte", "Prono", "cuantil_base"]],
+            round_numeric_df(prono_persistencia[["fecha", "horizonte", "Prono", "cuantil_base"]], decimals=2),
             width="stretch",
         )
     with c2:
         st.markdown("#### Analogías")
         st.dataframe(
-            prono_analogia[["fecha", "horizonte", "Prono"]],
+            round_numeric_df(prono_analogia[["fecha", "horizonte", "Prono"]], decimals=2),
             width="stretch",
         )
+    
+    st.markdown("### Gráficos")
+
+    idx_selected, _ = get_selected_row(
+        df_resamp,
+        forecast_cfg.yr_select,
+        forecast_cfg.mes_select,
+        forecast_cfg.vent_resamp,
+    )
+
+    hist_plot = df_resamp.iloc[
+        max(0, idx_selected - 12): idx_selected + 1
+    ].copy()
+
+    hist_plot["fecha"] = pd.to_datetime(
+        dict(
+            year=hist_plot["year"],
+            month=hist_plot["month"],
+            day=15,
+        )
+    )
+
+    st.markdown("#### Pronóstico mensual interactivo")
+
+    fig_interactive_sub = build_interactive_subseasonal_forecast(
+        df_hist=hist_plot,
+        persistence=prono_persistencia,
+        analogy=prono_analogia,
+        value_col=station.variable,
+    )
+
+    st.plotly_chart(fig_interactive_sub, width="stretch")
+
+
+    recent_obs = df_resamp.iloc[
+        max(0, idx_selected - forecast_cfg.long_busqueda + 1): idx_selected + 1
+    ].copy()
+
+    with st.expander("Boxplot histórico + persistencia", expanded=False):
+        fig_box_pers = plot_forecast_boxplot(
+            station_name=f"{station.nombre} - Persistencia",
+            recent_obs=recent_obs,
+            forecast=prono_persistencia,
+            historical=df_resamp,
+            period_col=forecast_cfg.vent_resamp,
+            value_col=station.variable,
+            search_length=forecast_cfg.long_busqueda,
+        )
+        if fig_box_pers is not None:
+            st.pyplot(fig_box_pers, width="stretch")
+
+    with st.expander("Boxplot histórico + analogía", expanded=False):
+        fig_box_ana = plot_forecast_boxplot(
+            station_name=f"{station.nombre} - Analogía",
+            recent_obs=recent_obs,
+            forecast=prono_analogia,
+            historical=df_resamp,
+            period_col=forecast_cfg.vent_resamp,
+            value_col=station.variable,
+            search_length=forecast_cfg.long_busqueda,
+        )
+        if fig_box_ana is not None:
+            st.pyplot(fig_box_ana, width="stretch")
+
+    with st.expander("Trazas análogas seleccionadas", expanded=False):
+        fig1 = plot_analogy_traces(
+            traces=trazas,
+            forecast=prono_analogia,
+            selected_analogs=analogos,
+            station_name=station.nombre,
+            value_col=station.variable,
+            selected_year=forecast_cfg.yr_select,
+            selected_month=forecast_cfg.mes_select,
+        )
+        if fig1 is not None:
+            st.pyplot(fig1, width="stretch")
+
+    with st.expander("Comparación mensual Matplotlib", expanded=False):
+        fig2 = plot_forecasts_comparison(
+            df=df_resamp,
+            persistence=prono_persistencia,
+            analogy=prono_analogia,
+            station_name=station.nombre,
+            value_col=station.variable,
+            selected_year=forecast_cfg.yr_select,
+            selected_month=forecast_cfg.mes_select,
+        )
+        if fig2 is not None:
+            st.pyplot(fig2, width="stretch")
+
+
+
 
     st.markdown("### Años análogos seleccionados")
     cols_analogos = [c for c in ["YrSim", "RMSE", "CoefC", "Nash", "ErrVol", "wi"] if c in analogos.columns]
-    st.dataframe(analogos[cols_analogos], width="stretch")
+    st.dataframe(round_numeric_df(analogos[cols_analogos], decimals=3), width="stretch")
 
-    st.markdown("### Gráficos")
-    fig1 = plot_analogy_traces(
-        traces=trazas,
-        forecast=prono_analogia,
-        selected_analogs=analogos,
-        station_name=station.nombre,
-        value_col=station.variable,
-        selected_year=forecast_cfg.yr_select,
-        selected_month=forecast_cfg.mes_select,
-    )
-    st.pyplot(fig1, width="stretch")
+    with st.expander("Serie mensual usada por el modelo", expanded=False):
+        st.dataframe(round_numeric_df(df_resamp.tail(24), decimals=2), width="stretch")
 
-    fig2 = plot_forecasts_comparison(
-        df=df_resamp,
-        persistence=prono_persistencia,
-        analogy=prono_analogia,
-        station_name=station.nombre,
-        value_col=station.variable,
-        selected_year=forecast_cfg.yr_select,
-        selected_month=forecast_cfg.mes_select,
-    )
-    st.pyplot(fig2, width="stretch")
+    # with st.expander("Corrección por mínimo hidráulico", expanded=False):
+    #     cols_hyd = [c for c in ["hyd_year", "n_valid", "p02", "p02_suavizado", "offset", "hyd_year_ref", "p02_ref"] if c in hyd_stats.columns]
+    #     st.dataframe(round_numeric_df(hyd_stats[cols_hyd].tail(15), decimals=3), width="stretch")
 
     st.markdown("### Descargas")
     df_export = pd.concat(
@@ -1129,25 +1447,26 @@ def render_pronostico_subestacional() -> None:
         ignore_index=True,
         sort=False,
     )
+
     d1, d2, d3 = st.columns(3, gap="large")
     with d1:
         st.download_button(
             "Descargar pronósticos CSV",
-            data=df_to_csv_bytes(df_export, index=False),
+            data=df_to_csv_bytes(round_numeric_df(df_export, decimals=3), index=False),
             file_name="pronostico_subestacional.csv",
             mime="text/csv",
         )
     with d2:
         st.download_button(
             "Descargar serie mensual CSV",
-            data=df_to_csv_bytes(df_resamp, index=False),
+            data=df_to_csv_bytes(round_numeric_df(df_resamp, decimals=3), index=False),
             file_name="serie_mensual_subestacional.csv",
             mime="text/csv",
         )
     with d3:
         st.download_button(
             "Descargar análogos CSV",
-            data=df_to_csv_bytes(analogos, index=False),
+            data=df_to_csv_bytes(round_numeric_df(analogos, decimals=4), index=False),
             file_name="analogos_subestacional.csv",
             mime="text/csv",
         )
