@@ -10,6 +10,7 @@ import pandas as pd
 
 from a5client import Crud, observacionesListToDataFrame
 
+
 from .limpieza_series import (
     eliminaVentana,
     corrimiento_vertical,
