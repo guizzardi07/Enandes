@@ -1385,18 +1385,18 @@ def render_pronostico_subestacional() -> None:
         if fig_box_pers is not None:
             st.pyplot(fig_box_pers, width="stretch")
 
-    with st.expander("Boxplot histórico + analogía", expanded=False):
-        fig_box_ana = plot_forecast_boxplot(
-            station_name=f"{station.nombre} - Analogía",
-            recent_obs=recent_obs,
-            forecast=prono_analogia,
-            historical=df_resamp,
-            period_col=forecast_cfg.vent_resamp,
-            value_col=station.variable,
-            search_length=forecast_cfg.long_busqueda,
-        )
-        if fig_box_ana is not None:
-            st.pyplot(fig_box_ana, width="stretch")
+    # with st.expander("Boxplot histórico + analogía", expanded=False):
+    #     fig_box_ana = plot_forecast_boxplot(
+    #         station_name=f"{station.nombre} - Analogía",
+    #         recent_obs=recent_obs,
+    #         forecast=prono_analogia,
+    #         historical=df_resamp,
+    #         period_col=forecast_cfg.vent_resamp,
+    #         value_col=station.variable,
+    #         search_length=forecast_cfg.long_busqueda,
+    #     )
+    #     if fig_box_ana is not None:
+    #         st.pyplot(fig_box_ana, width="stretch")
 
     with st.expander("Trazas análogas seleccionadas", expanded=False):
         fig1 = plot_analogy_traces(
