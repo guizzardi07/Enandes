@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 class StationConfig:
     """Parámetros de la estación y de la descarga desde A5."""
 
-    nombre: str = "Puerto Pilcomayo"
+    nombre: str = "Misión La Paz"
     id_serie: int = 42293 # 42293   32025
     id_serie_hist: int = 6362   # 29998 42293  
     fecha_desde: str = "1980-01-01 01:00:00"

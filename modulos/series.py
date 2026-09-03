@@ -100,8 +100,18 @@ def leer_serie_nivel_estacion(
         plt.legend()
         #plt.show()
 
+    # Metadatos de A5 necesarios para armar el plan de pydrodelta
+    # (node id = estacion.id, var id = var.id). Se toman de la respuesta cruda.
+    estacion_meta = resp.get("estacion") or {}
+    var_meta = resp.get("var") or {}
+
     meta = {
         "Estacion": estacion,
+        "serie_id": serie_id,
+        "estacion_id": estacion_meta.get("id"),
+        "var_id": var_meta.get("id"),
+        "tipo": resp.get("tipo", "puntual"),
+        "unidades": (resp.get("unidades") or {}).get("abrev"),
         "Fecha Inicio": df.index.min().date() if not df.empty else None,
         "Fecha Fin": df.index.max().date() if not df.empty else None,
         "Cantidad de registros": len(df),

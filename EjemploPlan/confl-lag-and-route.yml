@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=https://alerta.ina.gob.ar/ina/pydrodelta/schema/plan.json
+id: 999999
+name: confl. Paraná - Paraguay
+forecast_date:
+  days: 0
+time_interval:
+  days: 1
+output_sim_csv: ../data/confl-par-par/confl-par-par_sim.csv
+save_variable_sim:
+  - var_id: 40
+    output: ../data/confl-par-par/confl-par-par_40_sim.csv
+qualifiers:
+  - superior
+  - inferior
+output_stats: ../data/confl-par-par/stats.json
+topology:
+  timestart: "2026-01-01T00:00:00.000Z"
+  timeend:
+    days: 15
+  include_prono: true
+  prono_ignore_warmup: false
+  plot_variable:
+    - var_id: 40
+      output: ../data/confl-par-par/confl-par-par_40.pdf
+      timestart: "2024-09-01T03:00:00.000Z"
+  save_variable:
+    - var_id: 40
+      output: ../data/confl-par-par/confl-par-par_40.csv
+      format: csv
+      pivot: true
+  report_file: ../data/confl-par-par/report.json
+  nodes:
+    - id: 88
+      name: Yacyreta efluente
+      time_interval:
+        days: 1
+      node_type: station
+      variables:
+        - id: 40
+          interpolation_limit: 1
+          extrapolate: true
+          series:
+            - series_id: 937
+          series_prono:
+            - cal_id: 427
+              series_id: 1533
+              qualifier: main
+            - cal_id: 706 # 506
+              series_id: 35440
+              qualifier: main
+    - id: 55
+      name: Puerto Pilcomayo
+      time_interval:
+        days: 1
+      variables:
+        - id: 40
+          series:
+            - series_id: 26652
+            - series_id: 904
+          series_prono:
+            - series_id: 35300
+              cal_id: 546
+              qualifier: main
+    - id: 19
+      name: Corrientes
+      time_interval:
+        days: 1
+      node_type: station
+      variables:
+        - id: 40
+          series:
+            - series_id: 868
+          series_sim:
+            - series_id: 30113
+procedures:
+  - id: lag_and_route_yacy_corr
+    adjust: true
+    warmup_steps: 20
+    tail_steps: 60
+    save_results: ../data/confl-par-par/lag_and_route.csv
+    save_dict: ../data/confl-par-par/lag_and_route.json
+    type: LagAndRoute
+    boundaries:
+      - name: input_1
+        node_variable:
+          - 88
+          - 40
+    outputs:
+      - name: output
+        node_variable:
+          - 19
+          - 40
+    parameters:
+      lag: 3
+      k: 1
+      n: 1

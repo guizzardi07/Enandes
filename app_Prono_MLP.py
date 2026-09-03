@@ -67,6 +67,8 @@ from modulos.utils_time import (
     default_plot_window_from_index)
 from modulos.utils_series import apply_lag_shift_series
 from modulos.plotting import plot_timeseries_daily_grid, plot_scatter_obs_fit
+from modulos.limpieza_series import get_params_limpieza
+from modulos import plan_builder
 
 try:
     from modulos.subestacional import (
@@ -861,98 +863,98 @@ def render_pronostico_operativo() -> None:
                     )
                     st.session_state.shift_map[est_i] = float(vi)
 
-            obs = df_union[obs_col].dropna()
-            if obs.empty:
-                st.warning("No hay observado en estación objetivo.")
-                st.stop()
+        obs = df_union[obs_col].dropna()
+        if obs.empty:
+            st.warning("No hay observado en estación objetivo.")
+            st.stop()
 
-            t_emit = obs.index.max()
-            t_start = t_emit - pd.Timedelta(days=7)
+        t_emit = obs.index.max()
+        t_start = t_emit - pd.Timedelta(days=7)
 
-            df_week = df_union.loc[t_start:t_emit].copy()
-            obs_lastweek = df_week[obs_col].rename(f"{obs_col} (obs)")
+        df_week = df_union.loc[t_start:t_emit].copy()
+        obs_lastweek = df_week[obs_col].rename(f"{obs_col} (obs)")
 
-            forecasts = []
-            meta_rows = []
+        forecasts = []
+        meta_rows = []
 
-            for est in upstream_sel:
-                lag = int(get_lag_for_station(lags_df, est, default=0))
+        for est in upstream_sel:
+            lag = int(get_lag_for_station(lags_df, est, default=0))
 
-                # Ajustar modelo usando la ventana df_fit (la seleccionada arriba)
-                y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
-                    df_union=df_fit,
-                    est=est,
-                    obs_col=obs_col,
-                    lag=lag,
-                )
-
-                # Ajuste reciente (última semana)
-                y_hist_week = forecast_from_upstream(
-                    df=df_week,
-                    est=est,
-                    obs_col=obs_col,
-                    lag=lag,
-                    modelo=modelo,
-                    freq="1h",
-                )
-
-                # Pronóstico futuro
-                y_fcst = forecast_horizon_from_upstream_last(
-                    df_union=df_union,
-                    est=est,
-                    obs_col=obs_col,
-                    lag=lag,
-                    modelo=modelo,
-                    freq="1h",
-                )
-
-                # Curva continua: semana previa + futuro
-                y_full = pd.concat([y_hist_week.loc[:t_emit], y_fcst.loc[y_fcst.index > t_emit]])
-                y_full = y_full[~y_full.index.duplicated(keep="first")]
-
-                # aplicar shift vertical final (si el usuario lo definió)
-                shift_m = float(st.session_state.get("shift_map", {}).get(est, 0.0))
-                if shift_m != 0.0:
-                    y_full = y_full + shift_m
-
-                y_full = round_numeric_df(y_full.to_frame(name=f"Modelo ({est}, lag {lag}h, shift {shift_m:+.3f}m)"), decimals=2).iloc[:, 0]
-                forecasts.append(y_full)
-
-                meta_rows.append(
-                    {
-                        "Estacion": est,
-                        "lag_adoptado_h": lag,
-                        "R2_ajuste": float(getattr(modelo, "rsquared", float("nan"))),
-                        "n_ajuste": int(getattr(modelo, "nobs", 0)),
-                        "const": float(modelo.params.get("const", np.nan)),
-                        "beta_up_lag": float(modelo.params.get("up_lag", np.nan)),
-                        "shift_m": float(st.session_state.get("shift_map", {}).get(est, 0.0)),
-                    }
-                )
-
-            meta = pd.DataFrame(meta_rows)
-            st.markdown("#### Resumen modelos")
-            st.dataframe(meta, width="stretch")
-
-            df_final = pd.concat([obs_lastweek] + forecasts, axis=1)
-            df_final = round_numeric_df(df_final, decimals=2)
-
-            fig = plot_timeseries_daily_grid(
-                df_final,
-                ylabel="Nivel",
-                title="Observado (última semana) + modelo",
+            # Ajustar modelo usando la ventana df_fit (la seleccionada arriba)
+            y_obs_fit, y_fit_fit, modelo = ajustar_estacion_con_lag(
+                df_union=df_fit,
+                est=est,
+                obs_col=obs_col,
+                lag=lag,
             )
-            ax = fig.axes[0]
-            ax.axvline(t_emit, linestyle="--", linewidth=1)
-            ax.text(
-                t_emit,
-                ax.get_ylim()[1],
-                " Emisión prono",
-                va="top",
-                ha="left",
-                fontsize=8,
+
+            # Ajuste reciente (última semana)
+            y_hist_week = forecast_from_upstream(
+                df=df_week,
+                est=est,
+                obs_col=obs_col,
+                lag=lag,
+                modelo=modelo,
+                freq="1h",
             )
-            st.pyplot(fig, width="stretch")
+
+            # Pronóstico futuro
+            y_fcst = forecast_horizon_from_upstream_last(
+                df_union=df_union,
+                est=est,
+                obs_col=obs_col,
+                lag=lag,
+                modelo=modelo,
+                freq="1h",
+            )
+
+            # Curva continua: semana previa + futuro
+            y_full = pd.concat([y_hist_week.loc[:t_emit], y_fcst.loc[y_fcst.index > t_emit]])
+            y_full = y_full[~y_full.index.duplicated(keep="first")]
+
+            # aplicar shift vertical final (si el usuario lo definió)
+            shift_m = float(st.session_state.get("shift_map", {}).get(est, 0.0))
+            if shift_m != 0.0:
+                y_full = y_full + shift_m
+
+            y_full = round_numeric_df(y_full.to_frame(name=f"Modelo ({est}, lag {lag}h, shift {shift_m:+.3f}m)"), decimals=2).iloc[:, 0]
+            forecasts.append(y_full)
+
+            meta_rows.append(
+                {
+                    "Estacion": est,
+                    "lag_adoptado_h": lag,
+                    "R2_ajuste": float(getattr(modelo, "rsquared", float("nan"))),
+                    "n_ajuste": int(getattr(modelo, "nobs", 0)),
+                    "const": float(modelo.params.get("const", np.nan)),
+                    "beta_up_lag": float(modelo.params.get("up_lag", np.nan)),
+                    "shift_m": float(st.session_state.get("shift_map", {}).get(est, 0.0)),
+                }
+            )
+
+        meta = pd.DataFrame(meta_rows)
+        st.markdown("#### Resumen modelos")
+        st.dataframe(meta, width="stretch")
+
+        df_final = pd.concat([obs_lastweek] + forecasts, axis=1)
+        df_final = round_numeric_df(df_final, decimals=2)
+
+        fig = plot_timeseries_daily_grid(
+            df_final,
+            ylabel="Nivel",
+            title="Observado (última semana) + modelo",
+        )
+        ax = fig.axes[0]
+        ax.axvline(t_emit, linestyle="--", linewidth=1)
+        ax.text(
+            t_emit,
+            ax.get_ylim()[1],
+            " Emisión prono",
+            va="top",
+            ha="left",
+            fontsize=8,
+        )
+        st.pyplot(fig, width="stretch")
 
         st.markdown("#### Gráfico interactivo")
         fig_interactive = build_interactive_timeseries(
@@ -982,11 +984,18 @@ def render_pronostico_operativo() -> None:
                 file_name="ultima_semana_modelo.csv",
                 mime="text/csv",
             )
+        else:
+            st.download_button(
+                "Descargar Excel",
+                data=df_to_excel_bytes(df_export.set_index("Fecha"), sheet_name="prono_operativo"),
+                file_name="ultima_semana_modelo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
 def render_pronostico_subestacional() -> None:
     st.subheader("Pronóstico hidrológico subestacional")
     st.caption(
-        "Pronóstico mensual para Puerto Pilcomayo basado en persistencia de cuantiles "
+        "Pronóstico mensual para Misión La Paz basado en persistencia de cuantiles "
         "y analogías históricas. La serie se arma combinando la serie histórica y la serie actual."
     )
 
@@ -1471,9 +1480,290 @@ def render_pronostico_subestacional() -> None:
             mime="text/csv",
         )
 
-tab_operativo, tab_subestacional = st.tabs([
+def render_plan_pydrodelta() -> None:
+    st.subheader("Plan pydrodelta")
+    st.caption(
+        "Genera los archivos YAML de plan para correr las rutinas de pydrodelta "
+        "(https://github.com/jbianchi81/pydrodelta) con lo que se fue configurando en los "
+        "otros dos tabs. Se generan dos planes separados: operativo (paso horario) y "
+        "subestacional (paso mensual)."
+    )
+
+    caso = st.text_input(
+        "Caso (nombre de la carpeta de salidas)",
+        value=st.session_state.get("plan_caso", "pilcomayo-mlp"),
+        key="plan_caso",
+        help="Las salidas del plan se escriben en ./data/<caso>/, relativas al directorio "
+             "desde donde se corra pydrodelta. El YAML se guarda en resultados/planes/.",
+    )
+    st.caption(f"Salidas del plan: `{plan_builder.DATA_DIR_TPL.format(caso=caso)}/`")
+
+    # Plan operativo
+    st.markdown("### Plan operativo (paso 1 hora)")
+
+    if st.session_state.df_union is None or st.session_state.lags_df is None:
+        st.info("Ejecutá los pasos 1 y 2 del pronóstico operativo para poder generar el plan.")
+    else:
+        obs_col = st.session_state.obs_col
+        estaciones = {
+            r["Estacion"]: int(r["serie_id"])
+            for r in st.session_state.stations
+            if r.get("Estacion") and pd.notna(r.get("serie_id"))
+        }
+
+        upstream_default = [
+            e for e in st.session_state.get("upstream_sel_unificado", [])
+            if e in estaciones and e != obs_col
+        ]
+        if not upstream_default:
+            upstream_default = [e for e in estaciones if e != obs_col][:2]
+
+        upstream_plan = st.multiselect(
+            "Estaciones aguas arriba a incluir (un LinearFit por estación)",
+            options=[e for e in estaciones if e != obs_col],
+            default=upstream_default,
+            key="plan_upstream_sel",
+        )
+
+        # Ventanas: se toman de lo elegido en los pasos anteriores, editables
+        d_from = st.session_state.get("download_from")
+        d_to = st.session_state.get("download_to")
+        dias_atras_def = (d_to - d_from).days if d_from and d_to else 90
+
+        f_from = st.session_state.get("fit_start_unif")
+        f_to = st.session_state.get("fit_end_unif")
+        tail_steps_def = int((f_to - f_from).days * 24) if f_from and f_to else 0
+
+        lags_df = st.session_state.lags_df
+        lags_sel = [int(get_lag_for_station(lags_df, e, default=0)) for e in upstream_plan]
+        horas_adelante_def = max(lags_sel) if lags_sel else 24
+
+        c1, c2, c3 = st.columns(3, gap="large")
+        with c1:
+            plan_id_op = st.number_input(
+                "id del plan (placeholder)",
+                value=int(st.session_state.get("plan_id_op", plan_builder.PLAN_ID_OPERATIVO)),
+                step=1,
+                key="plan_id_op",
+                help="Placeholder hasta que haya un calibrado asignado en la API destino.",
+            )
+        with c2:
+            dias_atras = st.number_input(
+                "Días hacia atrás (timestart)",
+                value=int(dias_atras_def),
+                min_value=1,
+                step=1,
+                key="plan_dias_atras",
+            )
+        with c3:
+            horas_adelante = st.number_input(
+                "Horas hacia adelante (timeend)",
+                value=int(horas_adelante_def),
+                min_value=1,
+                step=1,
+                key="plan_horas_adelante",
+            )
+
+        c4, c5 = st.columns([2, 1], gap="large")
+        with c4:
+            nombre_op = st.text_input(
+                "Nombre del plan",
+                value=f"Pilcomayo - pronóstico operativo {obs_col}",
+                key="plan_nombre_op",
+            )
+        with c5:
+            tail_steps = st.number_input(
+                "tail_steps (pasos de calibración)",
+                value=int(tail_steps_def),
+                min_value=0,
+                step=1,
+                key="plan_tail_steps",
+                help="Ventana de ajuste del Paso 3 expresada en pasos de 1 hora. "
+                     "0 = usar toda la serie. pydrodelta recalibra en cada corrida.",
+            )
+
+        st.caption(
+            "El lag adoptado va como `x_offset` de cada serie aguas arriba y el `y_offset` "
+            "queda en 0: el corrimiento vertical lo absorbe el intercepto que recalibra pydrodelta."
+        )
+
+        if st.button("Generar plan operativo", type="primary", key="plan_gen_op"):
+            try:
+                refs = plan_builder.refs_desde_resumen(
+                    st.session_state.df_resumen,
+                    estaciones,
+                    params_por_estacion={e: get_params_limpieza(e) for e in estaciones},
+                )
+                obs_ref = refs[obs_col]
+                upstream_refs = []
+                for est in upstream_plan:
+                    ref = refs[est]
+                    ref.x_offset_horas = int(get_lag_for_station(lags_df, est, default=0))
+                    ref.comment = f"lag por correlación cruzada: {ref.x_offset_horas} h"
+                    upstream_refs.append(ref)
+
+                if not upstream_refs:
+                    st.error("Elegí al menos una estación aguas arriba.")
+                else:
+                    plan = plan_builder.build_plan_operativo(
+                        obs_ref=obs_ref,
+                        upstream_refs=upstream_refs,
+                        caso=caso,
+                        plan_id=int(plan_id_op),
+                        nombre=nombre_op,
+                        dias_atras=int(dias_atras),
+                        horas_adelante=int(horas_adelante),
+                        tail_steps=int(tail_steps) or None,
+                    )
+                    avisos = plan_builder.advertencias_plan(plan, [obs_ref] + upstream_refs)
+                    texto = plan_builder.plan_to_yaml(
+                        plan,
+                        comentarios=[
+                            f"generado por app_Prono_MLP el {datetime.now():%Y-%m-%d %H:%M}",
+                            "id de plan provisorio (placeholder): reemplazar por el calibrado real",
+                        ],
+                    )
+                    ruta = plan_builder.guardar_plan(texto, f"plan_operativo_{caso}.yml")
+                    st.session_state.plan_yaml_op = texto
+                    st.session_state.plan_yaml_op_nombre = ruta.name
+                    st.session_state.plan_avisos_op = avisos
+                    st.success(f"Plan operativo generado y guardado en `{ruta}`.")
+            except Exception as e:
+                st.exception(e)
+
+        if st.session_state.get("plan_yaml_op"):
+            for aviso in st.session_state.get("plan_avisos_op", []):
+                st.warning(aviso)
+            st.download_button(
+                "Descargar plan operativo (YAML)",
+                data=st.session_state.plan_yaml_op.encode("utf-8"),
+                file_name=st.session_state.plan_yaml_op_nombre,
+                mime="text/yaml",
+                key="plan_dl_op",
+            )
+            with st.expander("Ver YAML del plan operativo", expanded=False):
+                st.code(st.session_state.plan_yaml_op, language="yaml")
+
+    # Plan subestacional
+    st.markdown("### Plan subestacional (paso mensual)")
+
+    station_def = StationConfig()
+    cleaning_def = CleaningConfig()
+
+    s1, s2, s3 = st.columns(3, gap="large")
+    with s1:
+        plan_id_sub = st.number_input(
+            "id del plan (placeholder)",
+            value=int(st.session_state.get("plan_id_sub", plan_builder.PLAN_ID_SUBESTACIONAL)),
+            step=1,
+            key="plan_id_sub",
+        )
+    with s2:
+        serie_actual = st.number_input(
+            "serie_id actual",
+            value=int(station_def.id_serie),
+            step=1,
+            key="plan_serie_sub",
+        )
+    with s3:
+        serie_hist = st.number_input(
+            "serie_id histórica",
+            value=int(station_def.id_serie_hist),
+            step=1,
+            key="plan_serie_hist_sub",
+        )
+
+    nombre_sub = st.text_input(
+        "Nombre del plan",
+        value=f"Pilcomayo - pronóstico subestacional {station_def.nombre}",
+        key="plan_nombre_sub",
+    )
+
+    st.caption(
+        "Parámetros tomados del tab subestacional: "
+        f"búsqueda {st.session_state.get('sub_long_busqueda', 6)} meses, "
+        f"pronóstico {st.session_state.get('sub_long_prono', 4)} meses, "
+        f"{st.session_state.get('sub_cant_analogos', 5)} análogos, "
+        f"orden por {st.session_state.get('sub_orden_analogos', 'RMSE')}."
+    )
+
+    if st.button("Generar plan subestacional", type="primary", key="plan_gen_sub"):
+        if not a5_token:
+            st.error("Falta A5_TOKEN: se necesita para leer estacion.id y var.id desde A5.")
+        else:
+            try:
+                client = Crud(A5_URL_FIJO, token=a5_token)
+                with st.spinner("Leyendo metadata de las series desde A5..."):
+                    meta_act = plan_builder.leer_metadata_serie(client, int(serie_actual))
+                    meta_hist = plan_builder.leer_metadata_serie(client, int(serie_hist))
+
+                ref_actual = plan_builder.SerieRef(
+                    estacion=meta_act.get("estacion_nombre") or station_def.nombre,
+                    serie_id=int(serie_actual),
+                    estacion_id=meta_act.get("estacion_id"),
+                    var_id=meta_act.get("var_id"),
+                    tipo=meta_act.get("tipo", "puntual"),
+                    lim_outliers=tuple(cleaning_def.limite_outliers),
+                )
+                ref_hist = plan_builder.SerieRef(
+                    estacion=meta_hist.get("estacion_nombre") or station_def.nombre,
+                    serie_id=int(serie_hist),
+                    estacion_id=meta_hist.get("estacion_id"),
+                    var_id=meta_hist.get("var_id"),
+                    tipo=meta_hist.get("tipo", "puntual"),
+                    lim_outliers=tuple(cleaning_def.limite_outliers),
+                )
+
+                orden = str(st.session_state.get("sub_orden_analogos", "RMSE"))
+                plan = plan_builder.build_plan_subestacional(
+                    ref_actual=ref_actual,
+                    ref_historica=ref_hist,
+                    caso=caso,
+                    plan_id=int(plan_id_sub),
+                    nombre=nombre_sub,
+                    timestart=pd.Timestamp(station_def.fecha_desde).strftime(
+                        "%Y-%m-%dT%H:%M:%S.000Z"
+                    ),
+                    long_busqueda=int(st.session_state.get("sub_long_busqueda", 6)),
+                    long_prono=int(st.session_state.get("sub_long_prono", 4)),
+                    cantidad_analogos=int(st.session_state.get("sub_cant_analogos", 5)),
+                    orden_analogos=orden,
+                    orden_ascending=orden in {"RMSE", "ErrVol"},
+                )
+                avisos = plan_builder.advertencias_plan(plan, [ref_actual, ref_hist])
+                texto = plan_builder.plan_to_yaml(
+                    plan,
+                    comentarios=[
+                        f"generado por app_Prono_MLP el {datetime.now():%Y-%m-%d %H:%M}",
+                        "id de plan provisorio (placeholder): reemplazar por el calibrado real",
+                    ],
+                )
+                ruta = plan_builder.guardar_plan(texto, f"plan_subestacional_{caso}.yml")
+                st.session_state.plan_yaml_sub = texto
+                st.session_state.plan_yaml_sub_nombre = ruta.name
+                st.session_state.plan_avisos_sub = avisos
+                st.success(f"Plan subestacional generado y guardado en `{ruta}`.")
+            except Exception as e:
+                st.exception(e)
+
+    if st.session_state.get("plan_yaml_sub"):
+        for aviso in st.session_state.get("plan_avisos_sub", []):
+            st.warning(aviso)
+        st.download_button(
+            "Descargar plan subestacional (YAML)",
+            data=st.session_state.plan_yaml_sub.encode("utf-8"),
+            file_name=st.session_state.plan_yaml_sub_nombre,
+            mime="text/yaml",
+            key="plan_dl_sub",
+        )
+        with st.expander("Ver YAML del plan subestacional", expanded=False):
+            st.code(st.session_state.plan_yaml_sub, language="yaml")
+
+
+tab_operativo, tab_subestacional, tab_plan = st.tabs([
     "Pronóstico operativo",
     "Pronóstico subestacional",
+    "Plan pydrodelta",
 ])
 
 with tab_operativo:
@@ -1481,3 +1771,6 @@ with tab_operativo:
 
 with tab_subestacional:
     render_pronostico_subestacional()
+
+with tab_plan:
+    render_plan_pydrodelta()

@@ -60,7 +60,7 @@ El flujo subestacional incluye:
 La app está organizada en dos pestañas principales:
 
 ```text
-Pronóstico operativo | Pronóstico subestacional
+Pronóstico operativo | Pronóstico subestacional | Plan pydrodelta
 ```
 
 ### Pestaña 1 — Pronóstico operativo
@@ -80,6 +80,13 @@ Esta pestaña permite configurar y ejecutar el pronóstico mensual subestacional
 - cantidad de años análogos seleccionados;
 - criterio de ordenamiento de analogías;
 - origen del pronóstico, automático o manual.
+
+### Pestaña 3 — Plan pydrodelta
+
+Esta pestaña genera los archivos YAML de plan para correr las rutinas de
+[pydrodelta](https://github.com/jbianchi81/pydrodelta) con la configuración que el usuario fue
+armando en las otras dos pestañas. Se generan dos planes separados: uno operativo (paso horario) y
+uno subestacional (paso mensual).
 
 ---
 
@@ -146,7 +153,7 @@ python -m pip install --upgrade pip
 ### 4. Instalar dependencias
 
 ```bash
-pip install pandas numpy matplotlib plotly streamlit statsmodels openpyxl python-dotenv pytz a5-client
+pip install pandas numpy matplotlib plotly streamlit statsmodels openpyxl python-dotenv pytz a5-client pyyaml
 ```
 
 ---
@@ -324,7 +331,7 @@ Los resultados finales pueden descargarse en CSV o Excel.
 
 # Pronóstico subestacional
 
-El módulo subestacional está orientado a generar un pronóstico mensual a partir de la información histórica y reciente de la estación **Puerto Pilcomayo**.
+El módulo subestacional está orientado a generar un pronóstico mensual a partir de la información histórica y reciente de la estación **Misión La Paz**.
 
 ## Preparación de datos
 
@@ -453,6 +460,50 @@ Desde la interfaz se pueden descargar:
 
 ---
 
+# Plan pydrodelta
+
+La pestaña **Plan pydrodelta** traduce la configuración de la app a un plan de
+[pydrodelta](https://github.com/jbianchi81/pydrodelta), tomando como modelo el ejemplo
+`EjemploPlan/confl-lag-and-route.yml`.
+
+## Plan operativo (paso 1 hora)
+
+Requiere haber corrido los pasos 1 y 2 del pronóstico operativo. Escribe:
+
+- un nodo por estación, con `id` = `estacion.id` y variable `id` = `var.id` de A5;
+- `lim_outliers` y `lim_jump` tomados de `PARAMS_LIMPIEZA`;
+- el lag adoptado como `x_offset` de la serie aguas arriba;
+- `y_offset: 0` (el corrimiento vertical lo absorbe el intercepto que recalibra pydrodelta);
+- un procedimiento `LinearFit` por estación aguas arriba, con la ventana de calibración
+  expresada en `extra_pars.tail_steps`.
+
+## Plan subestacional (paso mensual)
+
+Escribe un nodo con la serie actual y la histórica (en ese orden de prioridad) y dos
+procedimientos: `Persistence` y `Analogy`, con los parámetros elegidos en la pestaña
+subestacional.
+
+## Salidas
+
+```text
+resultados/planes/plan_operativo_<caso>.yml
+resultados/planes/plan_subestacional_<caso>.yml
+```
+
+Las rutas de salida que se escriben dentro del plan son relativas a `./data/<caso>/`, es decir
+relativas al directorio desde donde se corra pydrodelta. El `id` del plan es un **placeholder**
+editable: hay que reemplazarlo por el id de calibrado real cuando exista en la API destino.
+
+Notas:
+
+- La limpieza no portable (ventanas de eliminación, corrimientos verticales por tramo y la
+  detección de saltos con ventana) no tiene equivalente en pydrodelta y queda fuera del plan.
+- Con más de una estación aguas arriba, los dos `LinearFit` escriben sobre la misma variable de
+  nodo: con `overwrite: false` (default) el segundo solo completa los huecos que dejó el primero.
+  El resultado de cada modelo queda íntegro en su propio `save_results`.
+
+---
+
 # Módulos principales
 
 ## `app_Prono_MLP.py`
@@ -525,6 +576,22 @@ Funciones principales:
 - `plot_analogy_traces`
 - `plot_forecasts_comparison`
 - `get_last_valid_forecast_origin`
+
+---
+
+## `plan_builder.py`
+
+Construye los planes de pydrodelta a partir del estado de la app.
+
+Funciones principales:
+
+- `refs_desde_resumen`
+- `leer_metadata_serie`
+- `build_plan_operativo`
+- `build_plan_subestacional`
+- `plan_to_yaml`
+- `guardar_plan`
+- `advertencias_plan`
 
 ---
 
@@ -638,6 +705,7 @@ Las descargas realizadas desde botones de Streamlit se guardan en la carpeta de 
 - Statsmodels
 - OpenPyXL
 - python-dotenv
+- PyYAML
 - pytz
 - a5-client
 
