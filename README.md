@@ -85,8 +85,9 @@ Esta pestaña permite configurar y ejecutar el pronóstico mensual subestacional
 
 Esta pestaña genera los archivos YAML de plan para correr las rutinas de
 [pydrodelta](https://github.com/jbianchi81/pydrodelta) con la configuración que el usuario fue
-armando en las otras dos pestañas. Se generan dos planes separados: uno operativo (paso horario) y
-uno subestacional (paso mensual).
+armando en las otras dos pestañas. Los planes van siempre separados, uno por modelo: **uno
+operativo por estación aguas arriba** (paso horario) y **uno subestacional por método** (paso
+mensual).
 
 ---
 
@@ -474,33 +475,53 @@ Requiere haber corrido los pasos 1 y 2 del pronóstico operativo. Escribe:
 - `lim_outliers` y `lim_jump` tomados de `PARAMS_LIMPIEZA`;
 - el lag adoptado como `x_offset` de la serie aguas arriba;
 - `y_offset: 0` (el corrimiento vertical lo absorbe el intercepto que recalibra pydrodelta);
-- un procedimiento `LinearFit` por estación aguas arriba, con la ventana de calibración
-  expresada en `extra_pars.tail_steps`.
+- un único procedimiento `LinearFit` por plan, con la ventana de calibración expresada en
+  `extra_pars.tail_steps`;
+- `series_sim` en la variable de salida, con el `series_id` de A5 que se carga en la pestaña;
+- `qualifiers: [superior, inferior]` a nivel plan;
+- `plot_variable` con el PDF de control (`extra_sim_columns: true`).
+
+**Un plan por estación aguas arriba.** Si se eligen dos estaciones, salen dos archivos, cada uno
+con su propio `id` (consecutivos desde el id base) y su propia carpeta de salidas. No van juntas
+en un mismo plan porque dos procedimientos que apuntan a la misma variable de nodo no se combinan:
+con `overwrite: false` (default) el segundo solo rellena los huecos que dejó el primero.
+
+**`series_sim` no es opcional en la práctica.** pydrodelta arma `output_sim_csv` recorriendo
+`series_sim` de cada variable de nodo: si no se declara, el plan corre sin error pero el CSV de
+simulación sale vacío. Si se deja en 0, la app avisa.
+
+**`qualifiers` tampoco.** `LinearFit`, `Persistence` y `Analogy` calculan siempre la banda de
+error (`inferior` / `superior`), pero se descarta al escribir la salida si el plan no la pide.
 
 ## Plan subestacional (paso mensual)
 
-Escribe un nodo con la serie actual y la histórica (en ese orden de prioridad) y dos
-procedimientos: `Persistence` y `Analogy`, con los parámetros elegidos en la pestaña
-subestacional.
+Escribe un nodo con la serie actual y la histórica (en ese orden de prioridad) y **un plan por
+método**: uno con `Persistence` (persistencia de cuantiles) y otro con `Analogy` (analogías
+históricas), con los parámetros elegidos en la pestaña subestacional. También acepta `series_sim`
+por método y escribe `qualifiers` y `plot_variable`.
+
+Se separan por el mismo motivo que los operativos: los dos procedimientos apuntan a la misma
+variable de nodo, y en un solo plan la analogía se limitaría a rellenar los huecos que dejó la
+persistencia. Cada plan lleva su `id` (consecutivos desde el id base) y su carpeta de salidas.
+
+En la pestaña se puede elegir qué métodos generar; por defecto salen los dos.
 
 ## Salidas
 
 ```text
-resultados/planes/plan_operativo_<caso>.yml
-resultados/planes/plan_subestacional_<caso>.yml
+resultados/planes/plan_operativo_<caso>-<estación>.yml        (uno por estación aguas arriba)
+resultados/planes/plan_subestacional_<caso>-persistencia.yml
+resultados/planes/plan_subestacional_<caso>-analogia.yml
 ```
 
-Las rutas de salida que se escriben dentro del plan son relativas a `./data/<caso>/`, es decir
-relativas al directorio desde donde se corra pydrodelta. El `id` del plan es un **placeholder**
-editable: hay que reemplazarlo por el id de calibrado real cuando exista en la API destino.
+Las rutas de salida que se escriben dentro del plan son relativas al directorio desde donde se
+corra pydrodelta, siempre en `./data/<caso>-<sufijo>/`, donde el sufijo es la estación aguas
+arriba en los planes operativos y el método en los subestacionales. El `id` del plan es un
+**placeholder** editable: hay que reemplazarlo por el id de calibrado real cuando exista en la
+API destino.
 
-Notas:
-
-- La limpieza no portable (ventanas de eliminación, corrimientos verticales por tramo y la
-  detección de saltos con ventana) no tiene equivalente en pydrodelta y queda fuera del plan.
-- Con más de una estación aguas arriba, los dos `LinearFit` escriben sobre la misma variable de
-  nodo: con `overwrite: false` (default) el segundo solo completa los huecos que dejó el primero.
-  El resultado de cada modelo queda íntegro en su propio `save_results`.
+Nota: la limpieza no portable (ventanas de eliminación, corrimientos verticales por tramo y la
+detección de saltos con ventana) no tiene equivalente en pydrodelta y queda fuera del plan.
 
 ---
 
@@ -587,8 +608,10 @@ Funciones principales:
 
 - `refs_desde_resumen`
 - `leer_metadata_serie`
-- `build_plan_operativo`
-- `build_plan_subestacional`
+- `build_plan_operativo` (un plan, una estación aguas arriba)
+- `build_planes_operativos` (un plan por estación de la lista)
+- `build_plan_subestacional` (un plan, un método)
+- `build_planes_subestacionales` (un plan por método)
 - `plan_to_yaml`
 - `guardar_plan`
 - `advertencias_plan`

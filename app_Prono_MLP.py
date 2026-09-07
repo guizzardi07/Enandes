@@ -1248,6 +1248,7 @@ def render_pronostico_subestacional() -> None:
 
     station = resultados["station"]
     forecast_cfg = resultados["forecast_cfg"]
+    analogy_cfg = resultados["analogy_cfg"]
     df_resamp = resultados["df_resamp"]
     outliers = resultados["outliers"]
     hyd_stats = resultados["hyd_stats"]
@@ -1496,10 +1497,20 @@ def render_plan_pydrodelta() -> None:
         help="Las salidas del plan se escriben en ./data/<caso>/, relativas al directorio "
              "desde donde se corra pydrodelta. El YAML se guarda en resultados/planes/.",
     )
-    st.caption(f"Salidas del plan: `{plan_builder.DATA_DIR_TPL.format(caso=caso)}/`")
+    st.caption(
+        f"Cada plan escribe sus salidas en `{plan_builder.DATA_DIR_TPL.format(caso=caso)}-<...>/`: "
+        "el sufijo es la estación aguas arriba en los planes operativos y el método en los "
+        "subestacionales."
+    )
 
     # Plan operativo
     st.markdown("### Plan operativo (paso 1 hora)")
+    st.caption(
+        "Se genera **un plan por estación aguas arriba**, cada uno con un solo `LinearFit`. "
+        "No van juntos en un mismo plan porque en pydrodelta dos procedimientos que escriben "
+        "sobre la misma variable de nodo no se combinan: con `overwrite=false` (default) el "
+        "segundo solo rellena los huecos que dejó el primero."
+    )
 
     if st.session_state.df_union is None or st.session_state.lags_df is None:
         st.info("Ejecutá los pasos 1 y 2 del pronóstico operativo para poder generar el plan.")
@@ -1519,11 +1530,46 @@ def render_plan_pydrodelta() -> None:
             upstream_default = [e for e in estaciones if e != obs_col][:2]
 
         upstream_plan = st.multiselect(
-            "Estaciones aguas arriba a incluir (un LinearFit por estación)",
+            "Estaciones aguas arriba (un plan por estación)",
             options=[e for e in estaciones if e != obs_col],
             default=upstream_default,
             key="plan_upstream_sel",
         )
+
+        sim_prev = st.session_state.get("plan_series_sim_op", {})
+        series_sim_map: dict[str, int] = {}
+        if upstream_plan:
+            st.write(
+                "`series_sim`: serie de A5 donde pydrodelta deposita la simulación de cada plan. "
+                "Si queda en 0 el plan corre igual, pero `output_sim_csv` sale vacío."
+            )
+            sim_df = st.data_editor(
+                pd.DataFrame(
+                    [
+                        {"Estacion": e, "series_sim": int(sim_prev.get(e, 0))}
+                        for e in upstream_plan
+                    ]
+                ),
+                width='stretch',
+                disabled=["Estacion"],
+                column_config={
+                    "Estacion": st.column_config.TextColumn("Estación aguas arriba"),
+                    "series_sim": st.column_config.NumberColumn(
+                        "series_sim (serie de salida en A5)",
+                        help="series_id de la serie de simulación en A5. 0 = no declarar series_sim.",
+                        step=1,
+                    ),
+                },
+                key="plan_series_sim_editor",
+            )
+            series_sim_map = {
+                r["Estacion"]: int(r["series_sim"])
+                for r in sim_df.to_dict("records")
+                if int(r["series_sim"] or 0) > 0
+            }
+            st.session_state.plan_series_sim_op = {
+                r["Estacion"]: int(r["series_sim"] or 0) for r in sim_df.to_dict("records")
+            }
 
         # Ventanas: se toman de lo elegido en los pasos anteriores, editables
         d_from = st.session_state.get("download_from")
@@ -1541,11 +1587,12 @@ def render_plan_pydrodelta() -> None:
         c1, c2, c3 = st.columns(3, gap="large")
         with c1:
             plan_id_op = st.number_input(
-                "id del plan (placeholder)",
+                "id del primer plan (placeholder)",
                 value=int(st.session_state.get("plan_id_op", plan_builder.PLAN_ID_OPERATIVO)),
                 step=1,
                 key="plan_id_op",
-                help="Placeholder hasta que haya un calibrado asignado en la API destino.",
+                help="Placeholder hasta que haya un calibrado asignado en la API destino. "
+                     "Los planes siguientes toman los ids consecutivos.",
             )
         with c2:
             dias_atras = st.number_input(
@@ -1567,9 +1614,10 @@ def render_plan_pydrodelta() -> None:
         c4, c5 = st.columns([2, 1], gap="large")
         with c4:
             nombre_op = st.text_input(
-                "Nombre del plan",
+                "Nombre base del plan",
                 value=f"Pilcomayo - pronóstico operativo {obs_col}",
                 key="plan_nombre_op",
+                help="A cada plan se le agrega ' desde <estación aguas arriba>'.",
             )
         with c5:
             tail_steps = st.number_input(
@@ -1584,10 +1632,12 @@ def render_plan_pydrodelta() -> None:
 
         st.caption(
             "El lag adoptado va como `x_offset` de cada serie aguas arriba y el `y_offset` "
-            "queda en 0: el corrimiento vertical lo absorbe el intercepto que recalibra pydrodelta."
+            "queda en 0: el corrimiento vertical lo absorbe el intercepto que recalibra pydrodelta. "
+            "Los planes salen con `qualifiers: [superior, inferior]` para conservar la banda de "
+            "error que calcula el LinearFit."
         )
 
-        if st.button("Generar plan operativo", type="primary", key="plan_gen_op"):
+        if st.button("Generar planes operativos", type="primary", key="plan_gen_op"):
             try:
                 refs = plan_builder.refs_desde_resumen(
                     st.session_state.df_resumen,
@@ -1605,58 +1655,81 @@ def render_plan_pydrodelta() -> None:
                 if not upstream_refs:
                     st.error("Elegí al menos una estación aguas arriba.")
                 else:
-                    plan = plan_builder.build_plan_operativo(
+                    planes = plan_builder.build_planes_operativos(
                         obs_ref=obs_ref,
                         upstream_refs=upstream_refs,
                         caso=caso,
-                        plan_id=int(plan_id_op),
-                        nombre=nombre_op,
+                        plan_id_base=int(plan_id_op),
+                        nombre_base=nombre_op,
                         dias_atras=int(dias_atras),
                         horas_adelante=int(horas_adelante),
                         tail_steps=int(tail_steps) or None,
+                        series_sim_por_estacion=series_sim_map,
                     )
-                    avisos = plan_builder.advertencias_plan(plan, [obs_ref] + upstream_refs)
-                    texto = plan_builder.plan_to_yaml(
-                        plan,
-                        comentarios=[
-                            f"generado por app_Prono_MLP el {datetime.now():%Y-%m-%d %H:%M}",
-                            "id de plan provisorio (placeholder): reemplazar por el calibrado real",
-                        ],
+                    generados = []
+                    for plan_op in planes:
+                        avisos = plan_builder.advertencias_plan(
+                            plan_op.plan, [obs_ref, refs[plan_op.estacion]]
+                        )
+                        texto = plan_builder.plan_to_yaml(
+                            plan_op.plan,
+                            comentarios=[
+                                f"generado por app_Prono_MLP el {datetime.now():%Y-%m-%d %H:%M}",
+                                "id de plan provisorio (placeholder): reemplazar por el calibrado real",
+                            ],
+                        )
+                        ruta = plan_builder.guardar_plan(texto, plan_op.nombre_archivo)
+                        generados.append(
+                            {
+                                "estacion": plan_op.estacion,
+                                "nombre": ruta.name,
+                                "ruta": str(ruta),
+                                "texto": texto,
+                                "avisos": avisos,
+                            }
+                        )
+                    st.session_state.plan_yamls_op = generados
+                    st.success(
+                        f"{len(generados)} plan(es) operativo(s) generado(s): "
+                        + ", ".join(f"`{g['ruta']}`" for g in generados)
                     )
-                    ruta = plan_builder.guardar_plan(texto, f"plan_operativo_{caso}.yml")
-                    st.session_state.plan_yaml_op = texto
-                    st.session_state.plan_yaml_op_nombre = ruta.name
-                    st.session_state.plan_avisos_op = avisos
-                    st.success(f"Plan operativo generado y guardado en `{ruta}`.")
             except Exception as e:
                 st.exception(e)
 
-        if st.session_state.get("plan_yaml_op"):
-            for aviso in st.session_state.get("plan_avisos_op", []):
+        for i, generado in enumerate(st.session_state.get("plan_yamls_op", [])):
+            st.markdown(f"**{generado['estacion']}** — `{generado['nombre']}`")
+            for aviso in generado["avisos"]:
                 st.warning(aviso)
             st.download_button(
-                "Descargar plan operativo (YAML)",
-                data=st.session_state.plan_yaml_op.encode("utf-8"),
-                file_name=st.session_state.plan_yaml_op_nombre,
+                f"Descargar plan de {generado['estacion']} (YAML)",
+                data=generado["texto"].encode("utf-8"),
+                file_name=generado["nombre"],
                 mime="text/yaml",
-                key="plan_dl_op",
+                key=f"plan_dl_op_{i}",
             )
-            with st.expander("Ver YAML del plan operativo", expanded=False):
-                st.code(st.session_state.plan_yaml_op, language="yaml")
+            with st.expander(f"Ver YAML — {generado['estacion']}", expanded=False):
+                st.code(generado["texto"], language="yaml")
 
     # Plan subestacional
     st.markdown("### Plan subestacional (paso mensual)")
+    st.caption(
+        "Igual que el operativo, se genera **un plan por método**: uno con `Persistence` "
+        "(persistencia de cuantiles) y otro con `Analogy` (analogías históricas). Los dos "
+        "escriben sobre la misma variable de nodo, así que en un mismo plan no se combinarían."
+    )
 
     station_def = StationConfig()
     cleaning_def = CleaningConfig()
 
-    s1, s2, s3 = st.columns(3, gap="large")
+    s1, s2, s3, s4 = st.columns(4, gap="large")
     with s1:
         plan_id_sub = st.number_input(
-            "id del plan (placeholder)",
+            "id del primer plan (placeholder)",
             value=int(st.session_state.get("plan_id_sub", plan_builder.PLAN_ID_SUBESTACIONAL)),
             step=1,
             key="plan_id_sub",
+            help="Placeholder hasta que haya un calibrado asignado en la API destino. "
+                 "El segundo plan toma el id siguiente.",
         )
     with s2:
         serie_actual = st.number_input(
@@ -1672,12 +1745,44 @@ def render_plan_pydrodelta() -> None:
             step=1,
             key="plan_serie_hist_sub",
         )
+    with s4:
+        metodos_sub = st.multiselect(
+            "Métodos a generar",
+            options=list(plan_builder.METODOS_SUBESTACIONAL),
+            default=list(plan_builder.METODOS_SUBESTACIONAL),
+            format_func=lambda m: plan_builder.METODOS_SUBESTACIONAL[m],
+            key="plan_metodos_sub",
+        )
 
     nombre_sub = st.text_input(
-        "Nombre del plan",
+        "Nombre base del plan",
         value=f"Pilcomayo - pronóstico subestacional {station_def.nombre}",
         key="plan_nombre_sub",
+        help="A cada plan se le agrega ' por <método>'.",
     )
+
+    sim_sub_prev = st.session_state.get("plan_series_sim_sub", {})
+    series_sim_sub: dict[str, int] = {}
+    if metodos_sub:
+        st.write(
+            "`series_sim`: serie de A5 donde pydrodelta deposita la simulación de cada método. "
+            "Si queda en 0 el plan corre igual, pero `output_sim_csv` sale vacío."
+        )
+        cols_sim = st.columns(len(metodos_sub), gap="large")
+        for col, metodo in zip(cols_sim, metodos_sub):
+            with col:
+                valor = st.number_input(
+                    f"series_sim — {plan_builder.METODOS_SUBESTACIONAL[metodo]}",
+                    value=int(sim_sub_prev.get(metodo, 0)),
+                    min_value=0,
+                    step=1,
+                    key=f"plan_serie_sim_sub_{metodo}",
+                )
+                if int(valor) > 0:
+                    series_sim_sub[metodo] = int(valor)
+        st.session_state.plan_series_sim_sub = {
+            m: int(st.session_state.get(f"plan_serie_sim_sub_{m}", 0)) for m in metodos_sub
+        }
 
     st.caption(
         "Parámetros tomados del tab subestacional: "
@@ -1687,9 +1792,11 @@ def render_plan_pydrodelta() -> None:
         f"orden por {st.session_state.get('sub_orden_analogos', 'RMSE')}."
     )
 
-    if st.button("Generar plan subestacional", type="primary", key="plan_gen_sub"):
+    if st.button("Generar planes subestacionales", type="primary", key="plan_gen_sub"):
         if not a5_token:
             st.error("Falta A5_TOKEN: se necesita para leer estacion.id y var.id desde A5.")
+        elif not metodos_sub:
+            st.error("Elegí al menos un método.")
         else:
             try:
                 client = Crud(A5_URL_FIJO, token=a5_token)
@@ -1715,12 +1822,13 @@ def render_plan_pydrodelta() -> None:
                 )
 
                 orden = str(st.session_state.get("sub_orden_analogos", "RMSE"))
-                plan = plan_builder.build_plan_subestacional(
+                planes_sub = plan_builder.build_planes_subestacionales(
                     ref_actual=ref_actual,
                     ref_historica=ref_hist,
                     caso=caso,
-                    plan_id=int(plan_id_sub),
-                    nombre=nombre_sub,
+                    metodos=metodos_sub,
+                    plan_id_base=int(plan_id_sub),
+                    nombre_base=nombre_sub,
                     timestart=pd.Timestamp(station_def.fecha_desde).strftime(
                         "%Y-%m-%dT%H:%M:%S.000Z"
                     ),
@@ -1729,35 +1837,51 @@ def render_plan_pydrodelta() -> None:
                     cantidad_analogos=int(st.session_state.get("sub_cant_analogos", 5)),
                     orden_analogos=orden,
                     orden_ascending=orden in {"RMSE", "ErrVol"},
+                    series_sim_por_metodo=series_sim_sub,
                 )
-                avisos = plan_builder.advertencias_plan(plan, [ref_actual, ref_hist])
-                texto = plan_builder.plan_to_yaml(
-                    plan,
-                    comentarios=[
-                        f"generado por app_Prono_MLP el {datetime.now():%Y-%m-%d %H:%M}",
-                        "id de plan provisorio (placeholder): reemplazar por el calibrado real",
-                    ],
+                generados_sub = []
+                for plan_sub in planes_sub:
+                    avisos = plan_builder.advertencias_plan(
+                        plan_sub.plan, [ref_actual, ref_hist]
+                    )
+                    texto = plan_builder.plan_to_yaml(
+                        plan_sub.plan,
+                        comentarios=[
+                            f"generado por app_Prono_MLP el {datetime.now():%Y-%m-%d %H:%M}",
+                            "id de plan provisorio (placeholder): reemplazar por el calibrado real",
+                        ],
+                    )
+                    ruta = plan_builder.guardar_plan(texto, plan_sub.nombre_archivo)
+                    generados_sub.append(
+                        {
+                            "metodo": plan_builder.METODOS_SUBESTACIONAL[plan_sub.metodo],
+                            "nombre": ruta.name,
+                            "ruta": str(ruta),
+                            "texto": texto,
+                            "avisos": avisos,
+                        }
+                    )
+                st.session_state.plan_yamls_sub = generados_sub
+                st.success(
+                    f"{len(generados_sub)} plan(es) subestacional(es) generado(s): "
+                    + ", ".join(f"`{g['ruta']}`" for g in generados_sub)
                 )
-                ruta = plan_builder.guardar_plan(texto, f"plan_subestacional_{caso}.yml")
-                st.session_state.plan_yaml_sub = texto
-                st.session_state.plan_yaml_sub_nombre = ruta.name
-                st.session_state.plan_avisos_sub = avisos
-                st.success(f"Plan subestacional generado y guardado en `{ruta}`.")
             except Exception as e:
                 st.exception(e)
 
-    if st.session_state.get("plan_yaml_sub"):
-        for aviso in st.session_state.get("plan_avisos_sub", []):
+    for i, generado in enumerate(st.session_state.get("plan_yamls_sub", [])):
+        st.markdown(f"**{generado['metodo'].capitalize()}** — `{generado['nombre']}`")
+        for aviso in generado["avisos"]:
             st.warning(aviso)
         st.download_button(
-            "Descargar plan subestacional (YAML)",
-            data=st.session_state.plan_yaml_sub.encode("utf-8"),
-            file_name=st.session_state.plan_yaml_sub_nombre,
+            f"Descargar plan de {generado['metodo']} (YAML)",
+            data=generado["texto"].encode("utf-8"),
+            file_name=generado["nombre"],
             mime="text/yaml",
-            key="plan_dl_sub",
+            key=f"plan_dl_sub_{i}",
         )
-        with st.expander("Ver YAML del plan subestacional", expanded=False):
-            st.code(st.session_state.plan_yaml_sub, language="yaml")
+        with st.expander(f"Ver YAML — {generado['metodo']}", expanded=False):
+            st.code(generado["texto"], language="yaml")
 
 
 tab_operativo, tab_subestacional, tab_plan = st.tabs([

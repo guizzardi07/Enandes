@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://alerta.ina.gob.ar/ina/pydrodelta/schema/plan.json
+# generado por app_Prono_MLP el 2026-09-03 14:46
+# id de plan provisorio (placeholder): reemplazar por el calibrado real
+id: 999901
+name: Pilcomayo - pronóstico operativo Misión La Paz
+forecast_date:
+  hours: 0
+time_interval:
+  hours: 1
+output_sim_csv: ./data/pilcomayo-mlp/pilcomayo-mlp_sim.csv
+output_stats: ./data/pilcomayo-mlp/pilcomayo-mlp_stats.json
+qualifiers:
+  - superior
+  - inferior
+topology:
+  timestart:
+    days: -90
+  timeend:
+    hours: 72
+  interpolation_limit:
+    hours: 24
+  save_variable:
+  - var_id: 2
+    output: ./data/pilcomayo-mlp/pilcomayo-mlp_2.csv
+    format: csv
+    pivot: true
+  plot_variable:
+    - var_id: 2
+      output: ./data/pilcomayo-mlp/pilcomayo-mlp_2.pdf
+      timestart:
+        days: -90
+      extra_sim_columns: true
+  report_file: ./data/pilcomayo-mlp/pilcomayo-mlp_report.json
+  nodes:
+  - id: 8175
+    name: Misión La Paz
+    time_interval:
+      hours: 1
+    node_type: station
+    variables:
+    - id: 2
+      interpolation_limit:
+        hours: 24
+      series:
+      - series_id: 42293
+        tipo: puntual
+        lim_outliers:
+        - 2.205
+        - 8.0
+        lim_jump: 2.0
+        y_offset: 0.0
+      series_sim:
+      - series_id: 46352
+  - id: 8041
+    name: Puente Aruma
+    time_interval:
+      hours: 1
+    node_type: station
+    variables:
+    - id: 2
+      interpolation_limit:
+        hours: 24
+      extrapolate: true
+      series:
+      - series_id: 42294
+        tipo: puntual
+        lim_outliers:
+        - 2.4
+        - 9.0
+        lim_jump: 2.0
+        x_offset:
+          hours: 72
+        y_offset: 0.0
+        comment: 'lag por correlación cruzada: 72 h'
+procedures:
+- id: linearfit-puente-aruma-mision-la-paz
+  type: LinearFit
+  boundaries:
+  - name: input_1
+    node_variable:
+    - 8041
+    - 2
+  outputs:
+  - name: output
+    node_variable:
+    - 8175
+    - 2
+  parameters: {}
+  extra_pars:
+    warmup_steps: 0
+    drop_warmup: false
+    tail_steps: 720
+  save_results: ./data/pilcomayo-mlp/linearfit-puente-aruma-mision-la-paz.csv
+  save_dict: ./data/pilcomayo-mlp/linearfit-puente-aruma-mision-la-paz.json
