@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 TIMEZONE = pytz.timezone("America/Argentina/Buenos_Aires")
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+
 MONTH_NAMES = {
     1: "Enero",
     2: "Febrero",
@@ -1091,12 +1092,13 @@ def plot_forecast_boxplot(
         for month in months
     ]
 
+
     fig, ax = plt.subplots(figsize=(11, 5))
 
     ax.boxplot(
         box_plot_data,
         patch_artist=True,
-        labels=box_plot_labels,
+        tick_labels=box_plot_labels,
         boxprops={"fill": None},
     )
 
